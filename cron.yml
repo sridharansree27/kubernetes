@@ -1,0 +1,35 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: mongo-clock-job
+spec:
+  schedule: "*/10 * * * *"  # every 10 minutes
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: mongo-clock
+            image: mongo:5.0
+            command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Inserting current time into clockdb..."
+              mongo --host mongodb-service:27017 \
+                   -u "$MONGO_INITDB_ROOT_USERNAME" \
+                   -p "$MONGO_INITDB_ROOT_PASSWORD" \
+                   --authenticationDatabase admin \
+                   --eval 'db = db.getSiblingDB("clockdb"); db.clock.insertOne({time: new Date()}); print("Time inserted!")'
+            env:
+            - name: MONGO_INITDB_ROOT_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: mongodb-secret
+                  key: username
+            - name: MONGO_INITDB_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mongodb-secret
+                  key: password
+          restartPolicy: OnFailure

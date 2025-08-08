@@ -1,0 +1,11 @@
+In Kubernetes, many API objects (like Pods, Deployments, Custom Resources) have two main parts
+	• Spec: The desired state, defined by the user
+	• Status: The current observed state, set by the system or controllers
+	• The Status Subresource is a dedicated part of the Kubernetes API object that holds the current status information and can be updated separately from the Spec
+
+How does the Status Subresource work internally?
+When an API object supports status as a subresource
+	• The API server exposes a separate HTTP endpoint to update /status of the resource
+	• Updates to the status subresource only modify the .status field->CONTROLLER
+	• Updates to the main resource modify .spec and other fields, but not .status->USER
+	• Kubernetes client libraries (client-go) use this subresource endpoint internally when updating status

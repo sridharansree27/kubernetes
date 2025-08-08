@@ -1,0 +1,12 @@
+Running the same operation (or reconciliation) multiple times has the same effect as running it once
+
+Why is Idempotency Important?
+	• Kubernetes controllers use a reconciliation loop
+		○ They watch the current state of resources
+		○ They compare it with the desired state
+		○ Then they try to fix any differences
+	• This reconciliation runs repeatedly, sometimes very frequently
+	• If reconciliation is not idempotent, applying the same fix multiple times can cause problems
+		○ Duplicate resources created
+		○ Conflicts or errors
+		○ Unstable or unpredictable behavior

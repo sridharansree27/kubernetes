@@ -1,0 +1,147 @@
+Master Node or Control Plane Node
+It has the following processes
+	• API Server
+	• Scheduler
+	• etcd
+	• Controller manager
+
+API Server
+Handling REST API Requests
+	• It receives all RESTful API calls (e.g., to create/delete/update pods, services, deployments)
+	• These requests can come from
+		○ kubectl CLI
+		○ Kubernetes Dashboard
+		○ Other control plane components (scheduler, controllers)
+		○ External automation or CI/CD pipelines
+Authentication & Authorization
+	• It verifies who is making the request (authentication)
+	• Checks if the user or component is allowed to perform that action (authorization)
+	• Supports multiple auth methods: tokens, certificates, OAuth, etc
+Validating Requests
+	• It checks if the request data is valid and conforms to Kubernetes API schemas
+	• Rejects bad or malformed requests
+Updating Cluster State
+	• After validation, the API server updates the cluster's desired state by writing changes into etcd (the cluster’s key-value store)
+	Example: when we create a pod, it stores pod information or pod object in etcd
+Serving Watch and List Requests
+	• Other components or clients often watch resources for changes (e.g., pods, nodes)
+	• The API server streams updates so clients get real-time notifications about cluster state changes
+Handling Admission Controllers
+	• Admission Controllers are plugins that intercept requests after authentication and validation, but before persistence
+	• They can modify requests (mutate), validate them, or deny requests
+	Examples: Namespace lifecycle, ResourceQuota, PodSecurityPolicy, etc.
+Acting as a Proxy
+	• The API server can proxy requests to different parts of the cluster, like individual nodes or services
+
+Scheduler
+Watches for unscheduled Pods
+	• It continuously watches the Kubernetes API for Pods that have been created but do not have a node assigned yet (spec.nodeName is empty) in etcd
+Filters nodes to find feasible ones (Predicates)
+	• The scheduler filters out nodes that cannot run the Pod due to constraints like:
+		○ Insufficient CPU, memory, or other requested resources
+		○ Node taints and Pod tolerations mismatch (e.g., node marked "NoSchedule")
+		○ Node selectors or affinity rules that the Pod requests but the node doesn’t satisfy
+		○ Pod affinity/anti-affinity rules
+Scores the feasible nodes (Priorities)
+	• After filtering, it scores the remaining nodes to find the most suitable one
+	• Scoring considers
+		○ Even distribution of Pods across nodes (to avoid overloading)
+		○ Matching labels and affinity rules
+		○ Custom priority functions or scheduling policies
+Selects the best node
+	• The node with the highest score is selected
+Binds the Pod to the selected node
+	• The scheduler tells the API server to assign the Pod to that node by updating the Pod’s .spec.nodeName field in etcd
+	• This binding triggers the kubelet on that node to start the Pod
+Repeats the cycle
+	• The scheduler continues watching for unscheduled Pods and assigns nodes accordingly
+
+etcd
+Cluster State Changes
+When you apply changes using kubectl, these changes go to the kube-apiserver first
+Writing to etcd
+The API server writes the updated cluster state into etcd (key-value pairs)
+Example, a Pod’s details are stored under a key like /registry/pods/<namespace>/<pod-name>
+Raft Consensus
+If etcd is running as a cluster(ie, multiple master nodes), the leader node handles the write and replicates it to follower nodes. All nodes must agree before committing the change
+Reading State
+Kubernetes components (like scheduler, controller-manager) read the state from etcd to decide what to do next.
+Watching Changes
+Components can watch certain keys or directories in etcd. When a change occurs, they get notified and react accordingly (e.g., scheduling a new Pod).
+
+Raft Consensus
+Imagine an etcd cluster with 3 nodes
+	• Node A (Leader)
+	• Node B (Follower)
+	• Node C (Follower)
+
+Step-by-Step Raft Process for a Write
+Leader Election
+		○ Among the etcd nodes, one node is elected as the leader
+		○ The leader is responsible for processing all writes
+		○ Followers just replicate the leader’s changes
+Client Write Request
+		○ You send a write request (e.g., add a key-value) to the etcd cluster using kubectl
+		○ The request is handled by the leader node
+Log Entry Creation
+		○ The leader creates a log entry with the new data
+		○ This log entry records the change to be applied
+Replication to Followers
+		○ The leader sends the log entry to the follower nodes (B and C)
+		○ Followers append this log entry to their own logs
+Acknowledgement
+		○ Followers reply back to the leader confirming they have appended the log entry
+Commit
+		○ When a majority of nodes (in 3-node cluster, at least 2) confirm, the leader commits the log entry
+		○ The leader then applies the change to its own key-value store (i.e., writes the data)
+		○ It sends a commit message to followers telling them to apply the change
+Response to Client
+		○ After commit, the leader sends success response to the client
+What Happens If a Node Fails?
+	• If a follower is down, the leader continues working with the rest
+	• When the follower comes back, it catches up by replaying the missing log entries
+	• If the leader fails, the followers elect a new leader
+
+Control Manager
+	• Each controller is a control loop that watches the shared state of the cluster in etcd through the Kubernetes API server and makes or requests changes to move the current state towards the desired state
+	• It ensures the cluster self-heals and keeps the desired state consistent
+Watch the API Server
+The controller manager watches the Kubernetes API server for changes to cluster objects it cares about (pods, nodes, replication controllers, etc.).
+Compare Desired vs Actual State
+For each controller, it compares the desired state (as declared by the user or system) against the current actual state of resources
+Take Action to Reconcile
+If there's a mismatch (Example, desired 3 replicas but only 1 pod running), the controller takes corrective action — like creating or deleting pods
+Loop Forever
+Controllers run in a continuous loop to ensure the cluster eventually converges to the desired state
+
+Shared Informer Framework
+	• Internally, kube-controller-manager uses shared informers and listers to efficiently watch and cache resource states
+	• Informers listen for events on resource objects in etcd and keep a local cache, reducing API server load
+	• Controllers operate on this cached data to respond quickly to changes
+
+Leader Election (In HA Setup)
+	• When multiple kube-controller-manager instances(ie, multiple master nodes) run for High Availability, they use leader election to ensure only one instance actively performs controller operations
+	• The leader periodically updates a resource (like a ConfigMap or Endpoint) to assert control
+
+How does Leader Election work?
+Shared Resource for Coordination
+	• All controller-manager instances try to acquire a "lock" on a shared resource in the Kubernetes cluster
+	• This "lock" is usually implemented using a Kubernetes resource such as
+		○ A ConfigMap
+		○ Or an Endpoint
+	• The lock contains information about which instance is the current leader
+Trying to Acquire Leadership
+	• Each controller-manager instance tries to write its identity (e.g., hostname or unique ID) into this lock resource
+	• Only one instance can successfully update this resource at a time
+Leader Holds the Lock
+	• The controller-manager that successfully updates the lock becomes the leader
+	• This leader instance is then responsible for running all the controllers actively
+Periodic Heartbeat
+	• The leader periodically updates ("renews") this lock resource, like a heartbeat signal
+	• This update typically happens every few seconds (e.g., every 15 seconds)
+	• The update contains a timestamp indicating the lock is still held
+Failover
+	• If the leader crashes or becomes unreachable, it stops updating the lock
+	• Other controller-manager instances notice that the lock's timestamp has expired (i.e., no heartbeat for a timeout period)
+	• One of the standby instances then tries to acquire the lock and becomes the new leader
+	• This ensures automatic failover with minimal downtime

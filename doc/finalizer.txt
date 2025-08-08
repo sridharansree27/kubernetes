@@ -1,0 +1,12 @@
+	• A Finalizer is a special metadata field on a Kubernetes resource that acts as a "pre-delete hook."
+	•  It ensures that certain cleanup or custom logic runs before the resource is actually removed from the cluster.
+
+How Finalizers Work Internally
+	• You add one or more strings (finalizer names) in the resource's .metadata.finalizers list
+	• When a user issues kubectl delete (or API delete) on the resource, Kubernetes does not immediately delete it
+	• Instead, Kubernetes sets .metadata.deletionTimestamp to mark the resource as "pending deletion"
+	• The resource remains visible in the API but is considered "terminating"
+	• The controller watching this resource notices the deletion timestamp and finalizers
+	• The controller runs custom cleanup code, e.g., deleting related external resources
+	• Once cleanup is complete, the controller removes the finalizer(s) from .metadata.finalizers
+	• Kubernetes sees no finalizers remain and then fully deletes the resource

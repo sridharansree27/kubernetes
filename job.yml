@@ -1,0 +1,33 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mongodb-seed-job
+spec:
+  template:
+    spec:
+      containers:
+      - name: mongodb-seeder
+        image: mongo:4.4
+        command:
+          - /bin/sh
+          - -c
+          - |
+            echo "Inserting sample data into MongoDB..."
+            mongo --host mongodb-service:27017 \
+                 -u "$MONGO_INITDB_ROOT_USERNAME" \
+                 -p "$MONGO_INITDB_ROOT_PASSWORD" \
+                 --authenticationDatabase admin \
+                 --eval 'db = db.getSiblingDB("testdb"); db.items.insertOne({name:"Laptop", price:80000}); print("Data Inserted!");'
+        env:
+        - name: MONGO_INITDB_ROOT_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: mongodb-secret
+              key: username
+        - name: MONGO_INITDB_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mongodb-secret
+              key: password
+      restartPolicy: Never
+  backoffLimit: 2

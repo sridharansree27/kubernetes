@@ -1,0 +1,109 @@
+ClusterIP (Default)
+	• ClusterIP exposes the Service on a cluster-internal IP
+	• This means the Service is only reachable from within the Kubernetes cluster
+	• It’s the default Service type
+Use case
+	• When your application components talk to each other inside the cluster (e.g., microservices)
+	• No external access from outside the cluster
+How it works
+	• Kubernetes assigns an internal IP to the Service
+	• Pods use this IP or the Service DNS name to connect
+
+Example:
+apiVersion: v1
+kind: Service
+metadata:
+  name: myapp-service
+spec:
+  selector:
+    app: myapp
+  ports:
+  - protocol: TCP
+    port: 80        # Service port
+    targetPort: 8080 # Port on the pod
+  type: ClusterIP   # default, can be omitted
+
+Usage
+	• Pods inside the cluster can access it via DNS name: myapp-service or myapp-service.namespace.svc.cluster.local
+
+NodePort
+	• Exposes the Service on each Node’s IP at a static port (called the NodePort)
+	• The NodePort range is usually 30000-32767
+	• Allows access to the Service from outside the cluster by hitting any node IP and the NodePort
+Use case:
+	• When you want to expose your service outside the cluster but don't have a cloud load balancer
+	• Good for development or bare-metal clusters
+How it works
+	• Kubernetes allocates a port (or you specify one)
+	• Traffic to <NodeIP>:<NodePort> is forwarded to the Service, which then load balances to the pods
+
+Example:
+apiVersion: v1
+kind: Service
+metadata:
+  name: myapp-nodeport
+spec:
+  selector:
+    app: myapp
+  ports:
+  - protocol: TCP
+    port: 80         # Service port inside cluster
+    targetPort: 8080 # Pod port
+    nodePort: 31000  # Port on each Node to expose externally
+  type: NodePort
+
+Usage
+	• Access the service externally by http://<NodeIP>:31000
+	• <NodeIP> is the IP address of any Kubernetes node
+
+LoadBalancer
+	• Exposes the Service externally using a cloud provider’s load balancer
+	• The cloud provider provisions a load balancer (like AWS ELB, GCP LB)
+	• The LoadBalancer gets a public IP and routes traffic to the Kubernetes nodes
+Use case
+	• When running Kubernetes on a cloud provider (AWS, GCP, Azure)
+	• You want external, managed load balancing with a stable public IP
+How it works
+	• When you create a Service with type: LoadBalancer, Kubernetes asks the cloud provider to provision a load balancer
+	• The load balancer routes traffic to the Kubernetes Service which routes to pods
+
+Example:
+apiVersion: v1
+kind: Service
+metadata:
+  name: myapp-loadbalancer
+spec:
+  selector:
+    app: myapp
+  ports:
+  - protocol: TCP
+    port: 80         # External port on LoadBalancer
+    targetPort: 8080 # Pod port
+  type: LoadBalancer
+
+Usage
+	• The cloud provider assigns a public IP or DNS name
+	• Access service via that public IP/DNS, which forwards to cluster pods
+
+ExternalName
+	• Maps the Service to a DNS name outside the cluster
+	• It doesn’t create a proxy or a real Service IP
+	• Instead, it returns a CNAME record to the external DNS
+Use case
+	• When your app inside Kubernetes needs to access external services via a DNS name, but you want to access them using Kubernetes Service abstraction
+How it works
+	• A DNS query for the Service returns the external DNS name
+	• Clients resolve it normally
+
+Example:
+apiVersion: v1
+kind: Service
+metadata:
+  name: external-google
+spec:
+  type: ExternalName
+  externalName: google.com
+
+Usage
+	• Inside the cluster, accessing http://external-google will resolve to google.com
+	• No proxying or IP is allocated

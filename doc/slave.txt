@@ -1,0 +1,98 @@
+Slave Node or Worker Node
+It has the following processes
+	• Kubelet
+	• Container runtime
+	• Kube proxy
+
+Kubelet
+Pod Lifecycle Management
+	• Kubelet watches for PodSpecs (Pod definitions) assigned to its node via the API server
+	• When a Pod is assigned, Kubelet creates and starts the containers defined in the PodSpec using a container runtime (like Docker, containerd)
+Container Monitoring
+	• Kubelet continuously monitors the state of containers
+	• It ensures containers are running as expected. If a container crashes or stops, Kubelet can restart it according to the Pod's restart policy
+Health Checks
+	• Kubelet runs liveness and readiness probes configured for containers
+	• If liveness probe fails, Kubelet restarts the container
+	• Readiness probe determines if the container is ready to accept traffic (used for load balancing)
+Node Status Reporting
+	• Kubelet periodically reports the node’s resource usage and health status back to the control plane through the API server
+	• This helps the scheduler make decisions and controllers maintain the cluster state
+Volume Mounting
+	• It manages mounting and unmounting of persistent storage volumes as specified in PodSpecs
+Secrets and ConfigMaps
+	• Kubelet fetches secrets and config maps from the API server and makes them available inside the containers
+
+Container runtime
+Kubernetes Scheduler assigns Pod to a node
+	• Scheduler decides which worker node should run the Pod
+Kubelet on the node receives Pod spec
+	• Kubelet watches the API server and notices it needs to start a new Pod
+	• Kubelet reads the Pod spec, which contains container image info, commands, environment variables, volumes, etc.
+Kubelet talks to Container Runtime
+	• Using a Container Runtime Interface (CRI) (a standardized API), kubelet asks the container runtime to
+		○ Pull the required container image from a container registry (like Docker Hub)
+		○ Create and start the container(s) specified in the Pod
+		○ Mount volumes and configure networking as specified
+Container Runtime pulls images
+	• If the image is not present locally, the runtime downloads it from the container registry
+	• This is done securely and efficiently with caching
+Container Runtime starts containers
+	• It creates container namespaces, control groups (cgroups), file system overlays, network interfaces, etc.
+	• Then it launches the container process
+Container Runtime reports status
+	• It communicates container state (running, stopped, crashed) back to kubelet
+Kubelet monitors containers
+	• Kubelet checks container health, restarts containers if needed (based on Pod spec)
+	• Updates Pod status in the Kubernetes API
+
+Kube Proxy
+Watches the Kubernetes API Server
+	• kube-proxy listens to the API server for updates on Services and Endpoints (pods behind those services)
+	• Whenever services or endpoints change (pods added or removed), kube-proxy updates its routing rules accordingly
+Manages Network Rules (Forwarding Traffic)
+Depending on the environment and configuration, kube-proxy can operate in different modes
+	• iptables mode (most common)
+		○ kube-proxy uses Linux's iptables rules to capture traffic destined to a Service IP
+		○ It rewrites or redirects traffic to one of the backend pod IPs
+		○ This happens inside the Linux kernel, so it’s efficient and fast
+	• ipvs mode (more advanced)
+		○ Uses Linux's IP Virtual Server (IPVS) feature for load balancing
+		○ More scalable and faster than iptables in large clusters
+	• userspace mode (legacy)
+		○ Proxies traffic in userspace
+		○ Less efficient and slower
+Load Balancing
+	• kube-proxy performs simple load balancing across the backend pods for a Service
+	• It chooses which pod to forward traffic to, often round-robin or random
+
+Load Balancing Algorithm
+Round-Robin
+	• Round-robin means kube-proxy sends each new request to the next pod in a fixed cyclic order
+	• It cycles through all available backend pods one by one, evenly distributing traffic
+Example:
+Suppose your Service has 3 backend pods with IPs
+	• Pod A: 10.0.0.1
+	• Pod B: 10.0.0.2
+	• Pod C: 10.0.0.3
+If requests come in this order: Request1, Request2, Request3, Request4, Request5, ...
+	• Request1 → Pod A
+	• Request2 → Pod B
+	• Request3 → Pod C
+	• Request4 → Pod A (starts over)
+	• Request5 → Pod B
+	• and so on...
+This ensures fair and even distribution of requests
+
+Random
+	• kube-proxy selects a backend pod randomly for each incoming request
+	• This means no fixed order, pods get requests in a random pattern
+Example:
+Same pods as before (A, B, C). For requests: Request1, Request2, Request3, Request4,...
+	• Request1 → Pod B
+	• Request2 → Pod C
+	• Request3 → Pod A
+	• Request4 → Pod C
+	• Request5 → Pod B
+	• and so on...
+Here, pods may get uneven numbers of requests temporarily, but over time, the distribution evens out statistically

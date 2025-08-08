@@ -1,0 +1,17 @@
+When a Kubernetes controller processes a resource and the reconciliation fails, it usually tries again later to fix the problem. But:
+	• If the controller retries immediately and repeatedly (tight retry loop), it can overload the API server or itself
+	• To avoid this, Kubernetes controllers use Rate Limiting and Backoff strategies to control how frequently retries happen
+
+How it works internally?
+	• Rate Limiting controls the maximum frequency of retries
+	• Backoff means the retry delay increases exponentially each time the same item fails, up to a max limit
+	• When reconciliation succeeds, the retry delay is reset
+
+Visual
+Attempt #	Retry Delay	Notes
+1	0 seconds (immediate)	First attempt
+2	1 second	Retry after 1 second
+3	2 seconds	Retry doubles the delay
+4	4 seconds	Exponential backoff continues
+5	8 seconds	...
+...	Max delay (e.g., 30s)	Delay capped at max limit

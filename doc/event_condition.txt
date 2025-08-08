@@ -1,0 +1,74 @@
+Events
+	• An Event is a timestamped record that describes something significant that happened to a Kubernetes object
+	• Events are short-lived and stored temporarily in the Kubernetes API server
+	• Example event types: Pod started, Pod failed, Deployment scaled, etc.
+
+What info does an Event contain?
+Type: Normal or Warning (severity level)
+Reason: A short machine-readable string explaining the event cause (e.g., "Started", "FailedScheduling")
+Message: Human-readable details
+Source: Component that reported the event (e.g., kubelet, scheduler)
+Timestamp: When the event occurred
+Object: The resource the event refers to
+
+Who creates Events?
+Kubernetes components and controllers running inside the cluster are responsible for generating events
+Example:
+	• kubelet (runs on each worker node) generates events about Pods it manages (like container start/stop/failure)
+	• kube-scheduler generates events about Pod scheduling (like successfully scheduled or scheduling failed)
+	• controllers (e.g., Deployment controller, StatefulSet controller) generate events about resource lifecycle changes (scaling, updates, errors)
+	• API server itself may generate some events
+	• Custom controllers/operators can also create events for their managed resources
+
+How does a component generate an Event?
+Internally, Kubernetes components call the Kubernetes API to create a new Event resource
+
+The event object includes details like
+	• involved object (the resource the event relates to)
+	• reason (short string)
+	• message (human-readable description)
+	• source (who generated the event)
+	• timestamps
+	• type (Normal or Warning)
+
+Example:
+kubectl describe pod my-pod
+
+Events:
+  Type     Reason              Age                From               Message
+  ----     ------              ----               ----               -------
+  Normal   Scheduled           2m                 default-scheduler  Successfully assigned default/my-pod to node1
+  Normal   Pulled              1m                 kubelet            Container image pulled
+  Normal   Created             1m                 kubelet            Created container my-container
+  Normal   Started             1m                 kubelet            Started container my-container
+  Warning  BackOff             10s (x3 over 1m)   kubelet            Back-off restarting failed container
+
+Conditions
+• A Condition is a status field on Kubernetes objects that describes the current state or health of the resource
+• Conditions are usually part of the resource's .status field and updated by controllers
+• Conditions summarize long-term or steady-state information, like whether a Pod is ready, or a Deployment is available
+
+Typical Condition fields
+A condition object has
+	• type (string): e.g., Ready, Available, PodScheduled
+	• status (string): True, False, or Unknown
+	• lastProbeTime: last time the condition was checked
+	• lastTransitionTime: last time the condition changed
+	• reason: short machine-readable string for the last transition
+	• message: human-readable message about the condition
+
+Example
+status:
+  conditions:
+  - type: PodScheduled
+    status: "True"
+    lastProbeTime: "2025-08-08T10:00:00Z"
+    lastTransitionTime: "2025-08-08T09:59:50Z"
+    reason: "PodScheduled"
+    message: "Pod has been scheduled to node minikube"
+  - type: Ready
+    status: "False"
+    lastProbeTime: "2025-08-08T10:01:00Z"
+    lastTransitionTime: "2025-08-08T10:00:50Z"
+    reason: "ContainersNotReady"
+    message: "Containers are not ready"

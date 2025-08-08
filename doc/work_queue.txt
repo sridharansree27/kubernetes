@@ -1,0 +1,20 @@
+	• It’s essentially a data structure that holds a list of items (keys or resource identifiers) that need to be processed or reconciled by the controller
+
+	Resource event (e.g., Pod created/updated/deleted)
+	        ↓
+	Informer detects the event
+	        ↓
+	Key (resource identifier) is added to the Work Queue
+	        ↓
+	Controller reads the key from the Work Queue (dequeue)
+	        ↓
+	Controller processes (reconciles) the resource state
+	        ↓
+	If successful → done
+	If failure → re-add the key to Work Queue (with retry/backoff)
+
+	• Key: Usually, a resource key is a string like "namespace/name" which uniquely identifies the resource
+	• Adding items: When Informer notices a change in a resource, it calls a function to add the resource’s key to the queue
+	• Processing items: The controller has worker goroutines that continuously pull items from the queue and perform reconciliation
+	• Retry & Rate limiting: If reconciliation fails, the item is requeued with some delay (exponential backoff)
+	• De-duplication: The queue prevents processing the same key multiple times concurrently by maintaining uniqueness inside the queue
