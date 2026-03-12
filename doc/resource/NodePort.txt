@@ -1,0 +1,66 @@
+What is NodePort
+A NodePort is a type of Kubernetes Service that exposes your application outside the cluster on a port of the Node.
+	• Every Node in the cluster opens the same NodePort.
+	• Traffic sent to NodeIP:NodePort is forwarded to the Service, which then goes to the backend Pods.
+
+Key idea: NodePort allows external clients to access your cluster without a load balancer.
+
+Example
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-nodeport
+spec:
+  type: NodePort
+  selector:
+    app: web
+  ports:
+    - port: 80         # Service port (inside cluster)
+      targetPort: 8080 # Pod container port
+      nodePort: 30007  # Port on Node to expose externally
+
+What Happens Internally
+	1. Kubernetes creates ClusterIP Service as usual.
+		○ ClusterIP = internal virtual IP (example: 10.96.0.20)
+	2. kube-proxy on every Node creates iptables rules:
+NodeIP:30007 → Service ClusterIP → backend Pods
+	3. External client sends request to:
+NodeIP:30007
+	
+Example:
+Node1 IP: 192.168.1.10
+Node2 IP: 192.168.1.11
+
+So both:
+http://192.168.1.10:30007
+http://192.168.1.11:30007
+
+reach the Service.
+	
+Request Flow
+Assume:
+Pods behind service:
+Pod1 → 10.244.1.5:8080
+Pod2 → 10.244.1.6:8080
+
+	• Client → NodeIP:NodePort → Node1:30007
+	• Node’s kube-proxy intercepts packet via iptables
+	• kube-proxy DNATs to one of the Pods through cluster IP or Service IP:
+10.244.1.5:8080 OR 10.244.1.6:8080
+	• Pod responds → Node forwards back → client
+
+NodePort vs ClusterIP
+Feature	ClusterIP	NodePort
+Accessibility	Internal only	Internal + external via NodeIP:Port
+IP	Virtual ClusterIP	Node IP
+Use case	Pod-to-Pod	External access without LoadBalancer
+
+NodePort Ports Range
+	• Default range: 30000 – 32767
+	• If you don’t specify nodePort, Kubernetes will auto-assign a port in that range.
+
+Accessing NodePort
+	• From outside cluster:
+http://<NodeIP>:<NodePort>
+	• From inside cluster:
+http://<ServiceName>:<Port>  # ClusterIP works internally

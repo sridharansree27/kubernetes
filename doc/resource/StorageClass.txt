@@ -1,0 +1,213 @@
+A StorageClass in Kubernetes is used to automatically create storage volumes when a Pod requests storage.
+It enables dynamic provisioning of storage.
+Before StorageClass existed, an admin had to manually create Persistent Volumes (PV).
+With StorageClass, Kubernetes automatically creates PVs when needed.
+
+Why StorageClass Is Needed
+Without StorageClass (Manual Storage):
+Admin creates PV → Developer creates PVC → Pod uses PVC
+
+Problem:
+	• Admin must create PVs manually
+	• Difficult to manage large clusters
+
+With StorageClass (Dynamic Storage):
+Developer creates PVC
+        │
+        ▼
+StorageClass automatically creates PV
+        │
+        ▼
+Pod uses storage
+
+So:
+StorageClass = template that tells Kubernetes how to create storage automatically
+
+Storage Architecture
+Storage components relationship:
+
+Pod
+ │
+ ▼
+PersistentVolumeClaim (PVC)
+ │
+ ▼
+StorageClass
+ │
+ ▼
+PersistentVolume (auto-created)
+ │
+ ▼
+Real Storage
+(EBS / Disk / NFS / etc.)
+
+Simple StorageClass Example
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: fast-storage
+provisioner: kubernetes.io/aws-ebs
+parameters:
+  type: gp2
+
+Explanation:
+Field	Meaning
+kind	resource type
+provisioner	plugin that creates storage
+parameters	storage configuration
+	
+Here the provisioner creates storage using Amazon Web Services EBS disks.
+
+Persistent Volume Claim Using StorageClass
+Developer creates PVC:
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: app-storage
+spec:
+  storageClassName: fast-storage
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+
+Meaning:
+Application needs 5GB storage
+Use storage class "fast-storage"
+
+What Happens Internally
+Now let’s see the internal working.
+
+Step 1 — StorageClass Created
+Admin creates StorageClass.
+kubectl apply -f storageclass.yaml
+
+The object is stored in:
+	• kube-apiserver
+	• Etcd
+
+Cluster now knows:
+StorageClass: fast-storage
+Provisioner: AWS EBS
+
+Step 2 — Developer Creates PVC
+Developer creates:
+PVC request
+Storage: 5GB
+StorageClass: fast-storage
+
+PVC is stored in the Kubernetes API(ie, etcd).
+
+Step 3 — PVC Controller Detects Request
+The PersistentVolume Controller inside kube-controller-manager watches for new PVCs.
+It sees:
+PVC needs storage
+No existing PV matches
+
+Step 4 — Dynamic Provisioning Triggered
+The controller checks:
+storageClassName = fast-storage
+
+It then calls the storage provisioner plugin.
+Example provisioners:
+	• AWS EBS
+	• Azure Disk
+	• GCE Persistent Disk
+	• NFS provisioner
+
+Step 5 — Storage Created in Cloud
+Example with AWS:
+AWS API called
+↓
+Create EBS Volume (5GB)
+
+Now Kubernetes automatically creates a PersistentVolume object.
+PV created automatically
+Bound to PVC
+
+Step 6 — Pod Uses PVC
+Pod specification:
+volumes:
+- name: storage
+  persistentVolumeClaim:
+    claimName: app-storage
+
+Step 7 — Pod Scheduled
+The kube-scheduler schedules the Pod to a node.
+
+Step 8 — kubelet Mounts Storage
+On the selected node, kubelet:
+	1. Attaches the created disk in cloud to the Node
+	2. Mounts it to the container
+
+Example mount:
+Node disk
+      │
+      ▼
+Container path
+/data
+
+Now the application can store data.
+
+Example
+Application Pod:
+Pod writes data to:
+/data/users.db(ie, Inside Container)
+
+Internally:
+/data
+ │
+ ▼
+PVC
+ │
+ ▼
+PV
+ │
+ ▼
+Cloud Disk (EBS)
+
+Even if Pod restarts:
+Pod recreated
+ ↓
+PVC reused
+ ↓
+Same disk attached
+ ↓
+Data preserved
+
+
+StorageClass Internal Architecture
+Developer creates PVC
+        │
+        ▼
+API Server stores PVC
+        │
+        ▼
+PV Controller detects request
+        │
+        ▼
+StorageClass provisioner called
+        │
+        ▼
+Cloud disk created
+        │
+        ▼
+PV object created
+        │
+        ▼
+PVC bound to PV
+        │
+        ▼
+Pod mounts storage
+
+StorageClass Parameters Example
+Example for SSD disk:
+parameters:
+  type: gp3
+  fsType: ext4
+
+Meaning:
+Parameter	Meaning
+type	disk type
+fsType	filesystem

@@ -1,0 +1,192 @@
+A LoadBalancer Service in Kubernetes is used to expose an application to external users through a cloud load balancer.
+
+It automatically creates an external IP address that users on the internet can access.
+
+Think of it like this:
+Internet User
+     │
+     ▼
+Cloud Load Balancer (External IP)
+     │
+     ▼
+NodePort (on each node)
+     │
+     ▼
+ClusterIP Service
+     │
+     ▼
+Pods
+So internally a LoadBalancer Service actually uses NodePort and ClusterIP.
+
+Why LoadBalancer Service Is Used
+Inside Kubernetes:
+	• Pods have Pod IPs (not reachable from internet)
+	• Services have ClusterIP (internal only)
+
+To allow external users to access the application, Kubernetes creates a LoadBalancer service.
+Example use cases:
+	• Web applications
+	• APIs
+	• Public microservices
+
+Example
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-loadbalancer
+spec:
+  type: LoadBalancer
+  selector:
+    app: web
+  ports:
+  - port: 80
+    targetPort: 8080
+
+Explanation:
+Field	Meaning
+type: LoadBalancer	Exposes service externally
+port	Service port
+targetPort	Container port
+selector	Selects backend Pods
+
+What Happens When You Create It
+Command:
+kubectl apply -f service.yaml
+
+Now internal working begins.
+
+Step-by-Step Internal Working
+Step 1 — Service object created
+The API Server stores the Service object in etcd.
+
+Example Service data stored:
+Service name: web-loadbalancer
+Type: LoadBalancer
+Selector: app=web
+Port: 80
+
+Step 2 — ClusterIP created
+Kubernetes first creates a ClusterIP service internally.
+
+Example:
+ClusterIP: 10.96.0.50
+
+So inside the cluster:
+web-loadbalancer.default.svc.cluster.local
+          │
+          ▼
+      10.96.0.50
+
+Step 3 — NodePort automatically created
+Kubernetes automatically creates a NodePort.
+
+Example:
+NodePort: 30520
+
+Now every node opens this port.
+
+Example nodes:
+Node1 IP: 192.168.1.10
+Node2 IP: 192.168.1.11
+
+Accessible internally as:
+192.168.1.10:30520
+192.168.1.11:30520
+
+Step 4 — Cloud Controller Manager Creates External Load Balancer
+If Kubernetes runs in cloud platforms like:
+	• Amazon Web Services
+	• Google Cloud
+	• Microsoft Azure
+
+The Cloud Controller Manager calls the cloud provider API and creates a real load balancer.
+
+Example external IP:
+34.120.55.210
+
+Step 5 — Load Balancer Targets Nodes
+Cloud Load Balancer forwards traffic to the NodePort.
+
+Example:
+Internet user
+     │
+     ▼
+34.120.55.210:80
+     │
+     ▼
+Node1:30520
+Node2:30520
+
+Step 6 — kube-proxy Routes Traffic to Pods
+Each node runs kube-proxy.
+
+kube-proxy creates iptables rules like:
+NodeIP:30520
+      │
+      ▼
+ClusterIP:10.96.0.50
+      │
+      ▼
+Pod1 10.244.1.5:8080
+Pod2 10.244.2.3:8080
+
+Traffic is load balanced between pods.
+
+Full Traffic Flow
+Assume:
+Pods:
+Pod1 → 10.244.1.5:8080
+Pod2 → 10.244.1.6:8080
+
+LoadBalancer IP:
+34.120.55.210
+
+User request:
+http://34.120.55.210
+
+Traffic flow:
+User
+ │
+ ▼
+External Load Balancer
+34.120.55.210
+ │
+ ▼
+NodePort
+192.168.1.10:30520
+ │
+ ▼
+ClusterIP Service
+10.96.0.50
+ │
+ ▼
+kube-proxy
+ │
+ ▼
+Pod1 or Pod2
+
+Architecture Diagram
+             Internet
+                │
+                ▼
+      External Load Balancer
+           34.120.55.210
+               │
+        ┌──────┴──────┐
+        ▼             ▼
+   Node1:30520     Node2:30520
+        │              │
+        ▼              ▼
+      kube-proxy   kube-proxy
+        │              │
+        └──────┬───────┘
+               ▼
+            ClusterIP
+            10.96.0.50
+               │
+      ┌────────┴────────┐
+      ▼                 ▼
+ Pod1 10.244.1.5   Pod2 10.244.1.6
+
+NodePort range
+30000–32767

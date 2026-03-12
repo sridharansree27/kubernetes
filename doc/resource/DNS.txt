@@ -1,0 +1,134 @@
+Where DNS Exists in Kubernetes
+Inside a Kubernetes cluster, DNS is provided by CoreDNS.
+CoreDNS runs as pods inside the cluster, usually in the kube-system namespace.
+
+Example:
+kubectl get pods -n kube-system
+
+Example output:
+coredns-7f89c4b6b7-abc12
+coredns-7f89c4b6b7-xyz98
+
+These pods act as the DNS server for the entire cluster.
+
+All containers automatically use this DNS server.
+
+How DNS Mappings Are Stored
+DNS records are not manually stored like traditional DNS servers.
+Instead:
+CoreDNS dynamically reads Kubernetes API objects from the API server.
+These objects include:
+	• Services
+	• Endpoints
+	• Pods (for headless services)
+
+Flow:
+Kubernetes API Server
+        ↓
+CoreDNS watches resources
+        ↓
+Creates DNS records automatically
+
+So DNS records are generated dynamically based on Kubernetes resources.
+
+Understanding Each Part of DNS Name
+Example DNS name:
+db.default.svc.cluster.local
+
+Let’s break it.
+Part	Meaning
+db	Service name
+default	Namespace
+svc	Indicates service resource
+cluster.local	Cluster DNS domain
+	
+So this means:
+Service: db
+Namespace: default
+Resource Type: service
+Cluster domain: cluster.local
+
+Example:
+Create a service:
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  namespace: dev
+spec:
+  selector:
+    app: web
+  ports:
+  - port: 80
+
+Assume pods exist:
+web-pod-1  → 10.244.1.10
+web-pod-2  → 10.244.2.15
+
+Kubernetes automatically creates DNS record:
+web.dev.svc.cluster.local → ClusterIP
+Example:
+web.dev.svc.cluster.local → 10.96.20.5
+
+Pods connect using:
+curl http://web.dev.svc.cluster.local
+
+Then service load-balances to pods.
+
+DNS Mapping for Headless Services
+If service is headless:
+clusterIP: None
+
+Then DNS returns pod IPs instead of service IP.
+Example pods:
+db-0 → 10.244.1.5
+db-1 → 10.244.1.6
+db-2 → 10.244.2.7
+
+DNS records created:
+db.default.svc.cluster.local → 
+   10.244.1.5
+   10.244.1.6
+   10.244.2.7
+
+Also individual pod DNS:
+db-0.db.default.svc.cluster.local → 10.244.1.5
+db-1.db.default.svc.cluster.local → 10.244.1.6
+db-2.db.default.svc.cluster.local → 10.244.2.7
+
+This is why StatefulSets work.
+
+Pod DNS Names
+Each pod also gets DNS based on:
+<pod-ip>.<namespace>.pod.cluster.local
+
+Example:
+Pod IP:
+10.244.1.5
+DNS:
+10-244-1-5.default.pod.cluster.local
+
+But usually pods are accessed through services, not directly.
+
+DNS Resolution Flow
+Example:
+A pod wants to call service:
+web.dev.svc.cluster.local
+
+Steps:
+Container
+   ↓
+/etc/resolv.conf
+   ↓
+CoreDNS Service IP
+   ↓
+CoreDNS Pod
+   ↓
+Query Kubernetes API
+   ↓
+Return IP
+
+Pod receives:
+web.dev.svc.cluster.local → 10.96.20.5
+
+Then packet goes to service.

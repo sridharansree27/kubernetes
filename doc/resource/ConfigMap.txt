@@ -1,0 +1,197 @@
+A ConfigMap in Kubernetes is used to store configuration data separately from application code so that containers can use configuration without rebuilding the image.
+
+In simple terms:
+ConfigMap = External configuration storage for Pods
+
+Examples of configuration:
+	• database host
+	• application mode (dev / prod)
+	• log level
+	• configuration files
+
+Why ConfigMap Is Needed
+Without ConfigMap:
+Application configuration is hardcoded in the container image.
+
+Example:
+DB_HOST=10.10.1.5
+LOG_LEVEL=debug
+
+Problem:
+If configuration changes:
+	• You must rebuild the container image
+	• Redeploy the application
+This is bad practice.
+
+With ConfigMap:
+Configuration is stored outside the container and injected into Pods dynamically.
+
+Example:
+DB_HOST=mysql-service
+LOG_LEVEL=info
+
+Application image remains the same.
+
+Example ConfigMap YAML
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+data:
+  DB_HOST: mysql-service
+  LOG_LEVEL: info
+
+Explanation:
+Field	Meaning
+apiVersion	Kubernetes API version
+kind	Resource type
+metadata.name	Name of ConfigMap
+data	Key-value configuration data
+
+How Pods Use ConfigMap
+There are three main ways.
+
+Method 1 — Environment Variables
+Example Pod:
+apiVersion: v1
+kind: Pod
+metadata:
+  name: web-pod
+spec:
+  containers:
+  - name: web
+    image: nginx
+    env:
+    - name: DB_HOST
+      valueFrom:
+        configMapKeyRef:
+          name: app-config
+          key: DB_HOST
+
+Inside container:
+echo $DB_HOST
+
+Output:
+mysql-service
+
+Method 2 — Entire ConfigMap as Environment Variables
+envFrom:
+- configMapRef:
+    name: app-config
+
+Container automatically gets:
+DB_HOST=mysql-service
+LOG_LEVEL=info
+
+Method 3 — Mount ConfigMap as Files
+ConfigMap values appear as files inside the container.
+
+Example:
+volumes:
+- name: config-volume
+  configMap:
+    name: app-config
+containers:
+- name: web
+  image: nginx
+  volumeMounts:
+  - name: config-volume
+    mountPath: /etc/config
+
+Inside container:
+/etc/config/DB_HOST
+/etc/config/LOG_LEVEL
+
+Each key becomes a file.
+
+Internal Working of ConfigMap
+Step 1 — User creates ConfigMap
+kubectl apply -f configmap.yaml
+
+Step 2 — API Server stores ConfigMap
+The ConfigMap object is stored in:
+etcd
+
+Cluster now knows:
+ConfigMap: app-config
+DB_HOST=mysql-service
+LOG_LEVEL=info
+
+Step 3 — Pod references ConfigMap
+Pod spec contains reference:
+configMapKeyRef
+or
+volume -> configMap
+
+Step 4 — Kubelet fetches ConfigMap
+When Pod is scheduled to a node:
+kubelet does the following:
+	1. Reads Pod specification
+	2. Finds ConfigMap reference
+	3. Requests ConfigMap data from API Server
+
+Step 5 — ConfigMap injected into container
+Depending on method:
+Method	What kubelet does
+Environment variables	Injects values into container runtime
+Volume mount	Creates files under mounted directory
+
+ConfigMap Volume Internals
+When mounted as volume:
+
+Kubelet creates a directory on the node:
+/var/lib/kubelet/pods/<pod-id>/volumes/kubernetes.io~configmap/
+
+Files are created:
+DB_HOST
+LOG_LEVEL
+
+Then container runtime mounts it inside container.
+
+ConfigMap Update Behavior
+If ConfigMap changes:
+kubectl edit configmap app-config
+
+Kubernetes updates etcd.
+
+If mounted as volume:
+Files inside container update automatically (after some seconds).
+
+If used as environment variables:
+Container must restart to see changes.
+
+ConfigMap Architecture
+User
+ │
+ ▼
+kubectl apply configmap
+ │
+ ▼
+API Server
+ │
+ ▼
+etcd (stores config data)
+ │
+ ▼
+Pod spec references ConfigMap
+ │
+ ▼
+kubelet fetches ConfigMap
+ │
+ ▼
+Injects into container
+ │
+ ├─ Environment variables
+ └─ Mounted files
+
+Example
+ConfigMap:
+data:
+  APP_ENV: production
+  LOG_LEVEL: warn
+
+Container reads:
+print(os.getenv("APP_ENV"))
+
+Output:
+production

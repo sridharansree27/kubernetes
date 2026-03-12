@@ -1,0 +1,98 @@
+What is a Namespace?
+A namespace in Kubernetes is a logical partition of the cluster resources.
+	• It does not correspond to a physical node.
+	• It is used to group, isolate, and organize resources like:
+		○ Pods
+		○ Services
+		○ ConfigMaps
+		○ Secrets
+		○ StatefulSets / Deployments
+Think of it as a “virtual cluster within a cluster”.
+
+Why Namespaces Are Needed
+Namespaces solve several problems:
+	1. Resource isolation
+Example: Development, Testing, and Production environments can exist in the same cluster without interfering.
+	2. Avoid naming collisions
+Two pods can have the same name in different namespaces:
+dev namespace → pod name: db
+prod namespace → pod name: db
+
+FQDN ensures they are different:
+db.dev.svc.cluster.local
+db.prod.svc.cluster.local
+	3. Access control
+Using Role-Based Access Control (RBAC), you can grant teams permissions only within their namespace.
+	4. Quota management
+You can limit CPU, memory, or storage per namespace.
+
+Internal Working
+Namespaces are logical entities stored in the Kubernetes API server.
+
+When you create a resource with a namespace:
+apiVersion: v1
+kind: Pod
+metadata:
+  name: mypod
+  namespace: dev
+spec:
+  containers:
+  - name: nginx
+    image: nginx
+
+Internally:
+	1. The API server stores the pod under namespace=dev.
+	2. Controllers, schedulers, and kube-proxy recognize the namespace.
+	3. DNS resolution incorporates the namespace:
+       <pod-name>.<service-name>.<namespace>.svc.cluster.local
+       This ensures proper service discovery and routing.
+
+Default Namespaces in Kubernetes
+Kubernetes comes with 4 default namespaces:
+Namespace	Purpose
+default	Default namespace for user resources
+kube-system	Kubernetes system components (kube-dns, kube-proxy, etc.)
+kube-public	Public resources, readable by all users
+kube-node-lease	Node heartbeat / lease information
+
+Example:
+Scenario:
+	• Cluster has multiple teams:
+	Team	Namespace
+	Dev	dev
+	QA	qa
+	Prod	Prod
+
+Team Dev creates a pod:
+apiVersion: v1
+kind: Pod
+metadata:
+  name: web
+  namespace: dev
+spec:
+  containers:
+  - name: nginx
+    image: nginx
+
+Team Prod creates a pod with the same name:
+apiVersion: v1
+kind: Pod
+metadata:
+  name: web
+  namespace: prod
+spec:
+  containers:
+  - name: nginx
+    image: nginx
+
+	• Both pods exist in the cluster without conflicts.
+	• Service discovery uses FQDN:
+web.dev.svc.cluster.local → Pod in dev
+web.prod.svc.cluster.local → Pod in prod
+
+Namespaces and Networking
+	• Namespaces are logical, not physical.
+	• Pods in the same namespace or different namespaces can communicate by default.
+	• Communication across namespaces uses full FQDN:
+pod in dev → connect to web.prod.svc.cluster.local
+	• You can restrict cross-namespace communication using NetworkPolicies.

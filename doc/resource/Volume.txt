@@ -1,0 +1,258 @@
+A Persistent Volume (PV) in Kubernetes is used to provide permanent storage for containers.
+Normally, container storage is temporary (ephemeral).
+If a Pod dies or restarts, the data inside the container is lost.
+Persistent Volume solves this problem.
+
+Simple idea:
+Pod dies → data still exists
+Pod recreated → data is reused
+
+So:
+Persistent Volume = permanent storage for Kubernetes Pods
+
+Why Persistent Volume Is Needed
+Example: You run a MongoDB database inside a Pod.
+
+Without persistent storage:
+MongoDB Pod
+   │
+   └── /data/db (container storage)
+
+If the Pod crashes:
+Pod deleted
+↓
+New Pod created
+↓
+Database data LOST
+
+This is unacceptable for databases.
+So we use Persistent Volumes.
+
+Basic Storage Architecture
+Kubernetes separates storage into three objects.
+
+Pod
+ │
+ ▼
+Persistent Volume Claim (PVC)
+ │
+ ▼
+Persistent Volume (PV)
+ │
+ ▼
+Physical Storage
+(NFS / Disk / Cloud Volume)
+
+Think of it like:
+Pod asks for storage
+PVC requests storage
+PV provides storage
+
+Persistent Volume Example
+Example PV:
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: mongodb-pv
+spec:
+  capacity:
+    storage: 5Gi
+  accessModes:
+    - ReadWriteOnce
+  hostPath:
+    path: /data/mongodb
+
+Meaning:
+Field	Meaning
+capacity	storage size
+accessModes	how Pods access storage
+hostPath	storage location on node
+	
+This creates 5GB storage on the node.
+
+Note:
+	• A PersistentVolume (PV) is a Kubernetes abstraction for storage.
+	• It represents real storage that exists anywhere inside the Node or outside the Node.
+
+
+Persistent Volume Claim (PVC)
+Pods do not directly use PV.
+They use PVC.
+
+Example:
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mongodb-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+
+Meaning:
+I need 5GB storage
+Kubernetes finds a matching PV.
+
+Pod Using Persistent Volume
+Example Pod:
+apiVersion: v1
+kind: Pod
+metadata:
+  name: mongodb-pod
+spec:
+  containers:
+  - name: mongodb
+    image: mongo
+    volumeMounts:
+    - mountPath: /data/db
+      name: mongo-storage
+  volumes:
+  - name: mongo-storage
+    persistentVolumeClaim:
+      claimName: mongodb-pvc
+
+Inside container:
+/data/db
+is now persistent storage(ie, PVC searches matching PV and mount it to /data/db inside container in pod)
+
+Internal Working
+Now let’s see what happens internally.
+
+Step 1 — Admin Creates PV
+Admin creates:
+PersistentVolume
+Name: mongodb-pv
+Size: 5GB
+
+The object is stored in:
+	• kube-apiserver
+	• persisted in etcd
+
+Cluster now knows:
+Available Storage: 5GB
+
+Step 2 — Developer Creates PVC
+Developer creates:
+PersistentVolumeClaim
+Request: 5GB
+
+Kubernetes tries to bind PVC to a matching PV.
+
+Matching rules:
+	• storage size
+	• access mode
+	• storage class
+
+If matched:
+PVC → Bound → PV
+
+Step 3 — Pod Uses PVC
+Pod spec references:
+persistentVolumeClaim:
+  claimName: mongodb-pvc
+
+Step 4 — Scheduler Assigns Pod to Node
+The kube-scheduler chooses a node.
+
+Example:
+mongodb-pod → Node1
+
+Step 5 — kubelet Mounts Storage
+On Node1, kubelet:
+	1. Reads Pod spec
+	2. Finds PVC
+	3. Finds bound PV
+	4. Mounts storage to container
+
+Example:
+Node directory:
+/data/mongodb
+Mounted inside container:
+/data/db
+
+Data Persistence Example
+Write data inside container:
+echo "user1" > /data/db/users.txt
+
+File stored in:
+/data/mongodb/users.txt
+
+Now Pod crashes.
+New Pod created.
+
+Storage still exists in Node.
+/data/db/users.txt
+
+Data is preserved.
+
+Internal Storage Flow
+User creates PV
+       │
+       ▼
+API Server stores PV
+       │
+       ▼
+User creates PVC
+       │
+       ▼
+PV Controller binds PVC → PV
+       │
+       ▼
+Pod uses PVC
+       │
+       ▼
+Scheduler assigns Node to Pod
+       │
+       ▼
+kubelet mounts storage
+       │
+       ▼
+Container uses storage
+
+Access Modes
+Mode	Meaning
+ReadWriteOnce	one node can read/write
+ReadOnlyMany	multiple nodes read
+ReadWriteMany	multiple nodes read/write
+	
+Example:
+Database:
+ReadWriteOnce
+
+Shared storage:
+ReadWriteMany
+
+Types of Storage Backends
+Persistent volumes can use:
+Storage	Example
+Node disk	hostPath
+Network storage	NFS
+Cloud disks	AWS EBS
+Distributed storage	Ceph
+	
+Example cloud providers:
+	• Amazon Web Services
+	• Google Cloud
+	• Microsoft Azure
+
+Real Production Architecture
+Typical database setup:
+Application Pod
+     │
+     ▼
+Persistent Volume Claim
+     │
+     ▼
+Persistent Volume
+     │
+     ▼
+Cloud Disk (EBS / Azure Disk)
+
+If Pod restarts:
+Application Pod recreated
+↓
+PVC attaches same storage
+↓
+Data preserved

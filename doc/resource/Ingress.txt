@@ -1,0 +1,248 @@
+What Ingress Actually Is
+Ingress = HTTP/HTTPS traffic router for Kubernetes services.
+
+It allows you to expose multiple services using:
+	• one external IP
+	• one Load Balancer
+	• domain-based routing
+	• path-based routing
+
+Without Ingress:
+Each service needs its own LoadBalancer service (expensive in cloud).
+
+With Ingress:
+Single LoadBalancer
+        │
+        ▼
+   Ingress Controller
+   ├── /app1 → Service1
+   ├── /app2 → Service2
+   └── /api  → Service3
+
+
+Concept
+Ingress resource alone does nothing.
+
+It needs an Ingress Controller.
+
+Example controllers:
+	• NGINX Ingress Controller
+	• Traefik
+	• HAProxy Ingress
+
+Think of it like:
+Ingress resource = rules
+Ingress controller = engine that implements rules
+
+Example
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: web-ingress
+spec:
+  rules:
+  - host: myapp.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: web-service
+            port:
+              number: 80
+
+Meaning:
+myapp.com
+   │
+   ▼
+web-service:80
+
+Architecture
+Assume cluster has:
+web-service
+api-service
+auth-service
+
+Ingress rule:
+rules:
+- host: myapp.com
+  http:
+    paths:
+    - path: /web
+      backend: web-service
+    - path: /api
+      backend: api-service
+
+Traffic routing:
+myapp.com/web  → web-service
+myapp.com/api  → api-service
+
+Step-by-Step Internal Working
+Now let's see what happens internally.
+
+Step 1 — User Creates Ingress
+Command:
+kubectl apply -f ingress.yaml
+
+The object is stored in:
+	• kube-apiserver
+	• persisted in etcd
+
+Cluster now has:
+Ingress object
+Host: myapp.com
+Path: /
+Service: web-service
+
+Step 2 — Ingress Controller Watches API Server
+The Ingress Controller Pod constantly watches the API server.
+
+When it detects the new Ingress rule:
+myapp.com → web-service
+It updates its internal configuration.
+
+Example with NGINX controller:
+It dynamically generates an NGINX configuration file.
+
+Example generated config:
+server {
+    server_name myapp.com;
+location / {
+        proxy_pass http://web-service;
+    }
+}
+
+Step 3 — External LoadBalancer Exposes Ingress Controller
+Ingress controller usually runs behind a Service type LoadBalancer.
+
+Example:
+Internet
+   │
+   ▼
+LoadBalancer
+   │
+   ▼
+Ingress Controller Pod
+
+External IP example:
+35.200.12.50
+DNS record:
+myapp.com → 35.200.12.50
+
+Step 4 — Client Request
+User browser:
+http://myapp.com
+
+DNS resolution:
+myapp.com
+↓
+35.200.12.50
+
+Request goes to:
+LoadBalancer → Ingress Controller
+
+Step 5 — Ingress Controller Routes Request
+The controller reads the request:
+Host: myapp.com
+Path: /
+
+Matches rule:
+myapp.com → web-service
+
+Then forwards request to the Kubernetes service.
+
+Step 6 — Service Routes to Pods
+The ClusterIP Service forwards traffic.
+
+Service example:
+web-service
+ClusterIP: 10.96.0.10
+
+kube-proxy iptables rule:
+10.96.0.10:80
+   │
+   ▼
+Pod1 10.244.1.5
+Pod2 10.244.1.6
+
+Step 7 — Pod Processes Request
+The request finally reaches the container.
+
+Example:
+nginx container
+
+Response flows back:
+Pod → Service → Ingress Controller →Load balancer  →User
+
+Network Flow
+User Browser
+    │
+    ▼
+DNS
+myapp.com
+    │
+    ▼
+LoadBalancer Service
+External IP
+    │
+    ▼
+Ingress Controller Pod
+(NGINX / Traefik)
+    │
+    ▼
+ClusterIP Service
+(web-service)
+    │
+    ▼
+kube-proxy
+    │
+    ▼
+Application Pods
+
+Path-Based Routing Example
+Ingress:
+rules:
+- host: shop.com
+  http:
+    paths:
+    - path: /products
+      backend:
+        service:
+          name: product-service
+    - path: /orders
+      backend:
+        service:
+          name: order-service
+
+Traffic:
+shop.com/products → product-service
+shop.com/orders   → order-service
+
+Host-Based Routing Example
+rules:
+- host: api.company.com
+  backend: api-service
+- host: app.company.com
+  backend: frontend-service
+
+Routing:
+api.company.com → API service
+app.company.com → Frontend service
+
+Why Ingress Is Powerful
+Without Ingress:
+Service1 → LoadBalancer
+Service2 → LoadBalancer
+Service3 → LoadBalancer
+Many external IPs.
+
+With Ingress:
+1 LoadBalancer
+    │
+    ▼
+Ingress Controller
+    │
+    ├── Service1
+    ├── Service2
+    └── Service3

@@ -1,0 +1,279 @@
+A Pod = group of containers sharing the same environment
+Shared things inside a Pod:
+	• Network namespace
+	• IP address
+	• Volumes (storage)
+	• Lifecycle
+
+The Core Problem Kubernetes Must Solve
+A Pod has one shared network.
+
+Example Pod:
+Pod
+ ├── Container A
+ └── Container B
+
+Requirement:
+Both containers must share:
+• same IP
+• same localhost
+• same ports namespace
+
+Example:
+Pod IP = 10.244.1.5
+Container A → port 8080
+Container B → port 9000
+
+Communication:
+Container A → localhost:9000 → Container B
+
+To make this possible, both containers must share the same Linux network namespace.
+
+What Is a Network Namespace
+Linux network namespace creates an isolated network stack.
+
+Each namespace has its own:
+interfaces
+IP addresses
+routing table
+Iptables
+
+Example:
+Namespace A
+   eth0 → 10.244.1.5
+
+Namespace B
+   eth0 → 10.244.1.6
+
+Containers normally run in separate namespaces.
+
+The Challenge for Kubernetes
+If Kubernetes simply starts containers normally:
+Container A → namespace A
+Container B → namespace B
+
+They would have different IP addresses, which breaks the Pod networking model.
+
+Kubernetes needs:
+Container A
+Container B
+     ↓
+Same network namespace
+
+Kubernetes Solution → Pause Container
+Kubernetes first creates a special container called the pause container.
+
+Purpose:
+Hold the Pod's network namespace
+
+Architecture:
+Pod
+ │
+ ├── pause container
+ │      (owns network namespace)
+ │
+ ├── container 1
+ │
+ └── container 2
+
+All other containers join the pause container’s namespace.
+
+Step-by-Step Pod Creation Internally
+When you run:
+kubectl apply -f pod.yaml
+
+Flow inside Kubernetes:
+Step 1
+Kubelet asks runtime (like containerd) to create Pod sandbox.
+Pod sandbox = pause container.
+
+Step 2
+Pause container starts.
+
+Example:
+pause
+It runs a very tiny program:
+pause()
+{
+  sleep forever
+}
+It basically does nothing.
+
+Purpose:
+Keep namespace alive
+
+Step 3
+Kubernetes attaches networking.
+
+Example:
+eth0 → 10.244.1.5
+
+The interface is attached to pause container namespace.
+
+Step 4
+Application containers start.
+
+But instead of creating new namespaces, they join the pause container namespace.
+
+Example:
+docker run --net=container:pause
+
+Now:
+Container A
+Container B
+Pause Container
+
+All share: same network namespace
+
+Real Internal Pod Structure
+On the node it looks like:
+
+Pod
+ │
+ ├── pause container
+ │       PID 1001
+ │
+ ├── nginx container
+ │       PID 1020
+ │
+ └── log container
+         PID 1040
+
+But networking belongs to: namespace of pause container
+
+Example Network Result
+Inside any container in the Pod:
+ip a
+Output:
+eth0 10.244.1.5
+
+Same IP in:
+pause container
+Container 1
+Container 2
+
+What Happens if Pause Container Dies
+If pause container stops:
+network namespace destroyed
+
+Which means:
+Pod networking disappears
+
+Therefore Kubernetes restarts the Pod.
+
+Why Kubernetes Cannot Skip Pause Container
+Without pause container:
+
+Problem:
+If first container exits
+↓
+namespace destroyed
+↓
+other containers lose network
+
+Pause container ensures:
+namespace always exists
+
+Even if other containers restart.
+
+Node
+ │
+ └── Pod
+      │
+      ├── Pause container
+      │       (owns network namespace)
+      │
+      ├── App container
+      │       localhost:8080
+      │
+      └── Sidecar container
+              localhost:9000
+
+Both communicate:
+Localhost
+
+What is a Network Stack?
+A network stack is everything a container needs to communicate over a network:
+
+Components of a Linux network stack:
+Component	Description	Example in Pod
+Network Namespace	Isolated network environment	Provided by pause container
+Loopback Interface (lo)	Internal container communication	127.0.0.1
+Ethernet Interface (eth0)	Connects Pod to node network	eth0 inside pause container
+IP Address	Unique identifier for Pod on cluster network	10.244.1.5
+Routing Table	Determines how packets are sent	Default route via veth → bridge
+ARP Table	Maps IPs to MAC addresses	ARP entries for other Pods
+iptables	NAT / firewall rules	CNI sets rules for Pod
+		
+Think of the network stack as a miniature network setup just for that Pod.
+
+How Kubernetes Implements Network Stack
+When a Pod is created:
+ 1. Kubernetes creates a pause container.
+ 2. Pause container gets its own Linux network namespace.
+ 3. CNI plugin (Flannel/Calico/Weave) attaches:
+	• A veth pair
+		○ veth0 inside the pause container
+		○ vethXXXXX on the host node
+	• Connects host side to node network bridge (e.g., cbr0)
+	• Assigns Pod IP (from cluster subnet, e.g., 10.244.1.5) to pause container
+	• Configures routes & iptables for traffic
+
+Architecture:
+Pod Network Stack (pause container)
+ ├─ eth0 → 10.244.1.5
+ ├─ lo → 127.0.0.1
+ ├─ Routing Table → default via veth → node bridge
+ └─ iptables → NAT/firewall rules
+
+All other containers in the Pod join this namespace, so they share the same IP, routing, and interfaces.
+
+How Containers Join the Network Stack
+Example Pod with 2 containers:
+Pod (10.244.1.5)
+ ├─ pause container (owns namespace)
+ ├─ container 1 → joins namespace
+ └─ container 2 → joins namespace
+
+Inside app container:
+ip a
+
+Output:
+eth0 10.244.1.5
+lo   127.0.0.1
+
+Both containers use same IP and eth0, can communicate via localhost.
+
+Comparison with Docker Networking
+Aspect	Docker Container	Kubernetes Pod
+IP per container?	Yes	One per Pod (shared by containers)
+Namespace isolation	One per container	One per Pod, shared by containers
+Pause container	Not needed	Yes, holds network namespace
+veth pair	container ↔ docker0 bridge	pause container ↔ node bridge
+Network bridge	docker0 by default	CNI bridge (e.g., cbr0)
+NAT / iptables	Docker configures	CNI + kubelet configures
+Multiple containers	Each has separate network	Share the same Pod network stack
+
+Step-by-Step Example of Network Stack Creation
+Suppose we create a Pod:
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx-pod
+spec:
+  containers:
+  - name: nginx
+    image: nginx
+
+Internal flow:
+	1. Kubelet creates pause container → new network namespace.
+	2. Assigns Pod IP: 10.244.1.5.
+	3. Creates veth pair:
+		○ veth0 → inside pause container
+		○ vethXXXXX → connected to node bridge cbr0
+	4. Sets routing:
+		○ Default route via vethXXXXX → node network → cluster → Internet
+	5. Sets iptables rules for NAT / port mapping.
+	6. Other containers in the Pod join the pause container namespace:
+		○ ip netns add or equivalent
+		○ Now all containers share eth0, routes, and IP

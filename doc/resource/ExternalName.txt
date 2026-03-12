@@ -1,0 +1,67 @@
+What is an ExternalName Service?
+An ExternalName Service is a special type of Kubernetes Service that does not have a ClusterIP.
+	• Instead of pointing to Pods inside the cluster, it points to an external DNS name (like a database hosted outside the cluster).
+	• Kubernetes automatically resolves the Service name to the external DNS name using CoreDNS.
+Key idea: It acts as a DNS alias inside the cluster.
+
+Why Use ExternalName?
+	• Your application inside Kubernetes wants to access a service outside the cluster.
+	• You don’t want to hardcode the external hostname.
+	• Use ExternalName to make it look like a normal Kubernetes Service.
+
+Example:
+	• External database: mysql.example.com
+	• Kubernetes Pod: wants to access mysql-service.default.svc.cluster.local
+	• ExternalName Service maps it automatically to mysql.example.com
+
+Example
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql-service
+spec:
+  type: ExternalName
+  externalName: mysql.example.com
+
+How It Works Internally
+	1. You create the Service:
+kubectl apply -f externalname.yaml
+	2. Kubernetes stores the Service object in etcd via API Server.
+	3. CoreDNS watches services and sees:
+Service: mysql-service.default.svc.cluster.local
+Type: ExternalName
+ExternalName: mysql.example.com
+
+When a Pod inside the cluster does:
+curl http://mysql-service.default.svc.cluster.local:3306
+	• CoreDNS resolves:
+mysql-service.default.svc.cluster.local → mysql.example.com
+
+	• The Pod now connects directly to the external DNS host.
+
+Example
+Pod inside cluster
+        │
+        ▼
+curl http://mysql-service
+        │
+        ▼
+CoreDNS resolves
+        │
+        ▼
+mysql-service.default.svc.cluster.local → mysql.example.com
+        │
+        ▼
+Traffic goes to external host
+
+Notice: No ClusterIP, no kube-proxy involvement, no Pods behind the Service. It’s purely DNS.
+
+Example in Practice
+Suppose you have:
+External DB → mysql.example.com
+Pod → web-app
+
+Pod wants to query DB:
+curl http://mysql-service:3306
+	• CoreDNS resolves mysql-service → mysql.example.com
+	• Pod can connect as if it were a normal Kubernetes service

@@ -1,0 +1,125 @@
+Example
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-deployment
+  labels:
+    app: web
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.25
+        ports:
+        - containerPort: 80
+	• replicas: 3 → Deployment wants 3 Pods running
+	• selector → matches Pods with label app: web
+	• template → defines the Pod specification
+
+Step-by-Step Internal Working
+Step 1: You apply the Deployment
+kubectl apply -f deployment.yaml
+	• The API Server stores the Deployment object in etcd.
+	• Desired state is now: 3 Pods of nginx should exist.
+
+Step 2: Deployment Controller notices new Deployment Object
+	• The Deployment Controller runs inside kube-controller-manager.
+	• It sees a Deployment object with:
+		○ 3 replicas
+		○ Pod template with label app: web
+	• It creates a ReplicaSet to manage the Pods.
+
+Step 3: ReplicaSet creates Pods
+	• ReplicaSet ensures the desired number of Pods are running.
+	• Creates 3 Pods based on the Pod template:
+	Pod Name	Status
+	web-deployment-abc123	Running
+	web-deployment-def456	Running
+	web-deployment-ghi789	Running
+	• Each Pod gets a unique Pod IP (ephemeral):
+	Pod Name	Pod IP
+	web-deployment-abc123	10.244.1.5
+	web-deployment-def456	10.244.1.6
+	web-deployment-ghi789	10.244.2.3
+
+Step 4: Networking of Pods
+	• Each Pod has its own eth0, IP, loopback interface (using CNI plugin like Calico or Flannel).
+	• Pods in the Deployment can communicate with each other via Pod IP.
+	• Problem: Pod IPs are ephemeral → if Pods restart, IP changes.
+Solution: Create a Service to provide a stable endpoint.
+
+Step 5: Service (optional but common)
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-service
+spec:
+  selector:
+    app: web
+  ports:
+    - port: 80
+      targetPort: 80
+  type: ClusterIP
+	• Service selects Pods with app: web.
+	• Assigns a ClusterIP (stable IP inside cluster) → e.g., 10.96.0.10.
+	• kube-proxy sets iptables rules:
+10.96.0.10:80 → DNAT → one of web-deployment Pods
+	• CoreDNS resolves web-service.default.svc.cluster.local → 10.96.0.10.
+
+Step 6: Traffic Flow Example
+	1. Pod A calls:
+curl http://web-service
+	2. CoreDNS resolves to ClusterIP: 10.96.0.10
+	3. kube-proxy intercepts request and forwards to one of the Pods:
+10.96.0.10:80 → 10.244.1.5:80 (or 10.244.1.6:80, round-robin)
+	4. Pod responds → kube-proxy sends response back to Pod A.
+
+Step 7: Pod Failure / Replacement
+	• Suppose web-deployment-def456 crashes.
+	• ReplicaSet notices only 2 Pods running (desired = 3).
+	• ReplicaSet creates a new Pod:
+	Old Pod Name	New Pod Name	IP
+	web-deployment-def456	web-deployment-xyz789	10.244.2.7
+	• Traffic via Service is still routed correctly because Service uses labels, not Pod IPs.
+
+Step 8: Rolling Update
+	• You update Deployment:
+image: nginx:1.26
+	• Deployment Controller:
+	1. Creates new Pods with nginx:1.26
+	2. Gradually terminates old Pods (nginx:1.25) while keeping replicas alive
+	3. Ensures zero downtime
+	• Internally: ReplicaSet manages old Pods and new Pods until update completes.
+
+Step 9: Rollback (Optional)
+	• If new Pods fail health checks, Deployment can rollback to previous ReplicaSet with nginx:1.25.
+
+Internal Architecture
+API Server (stores Deployment object)
+      │
+      ▼
+Deployment Controller (in kube-controller-manager)
+      │
+      ▼
+ReplicaSet (manages Pods)
+      │
+      ├─ Pod 1 (10.244.1.5)
+      ├─ Pod 2 (10.244.1.6)
+      └─ Pod 3 (10.244.2.3)
+      │
+      ▼
+Service (ClusterIP / NodePort / LoadBalancer)
+      │
+      ▼
+kube-proxy + iptables
+      │
+      ▼
+Traffic routed to Pods

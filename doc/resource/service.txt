@@ -1,0 +1,183 @@
+Problem Kubernetes Service Solves
+Pods are temporary (ephemeral).
+
+Example:
+Pod A (client)
+IP: 10.244.1.5
+
+Pod B (server)
+IP: 10.244.1.6
+
+Pod A calls Pod B:
+curl http://10.244.1.6:80
+
+Now Pod B crashes and Kubernetes recreates it:
+Old Pod B IP → 10.244.1.6
+New Pod B IP → 10.244.2.3
+
+Now Pod A cannot reach it anymore.
+So Kubernetes introduced Service.
+Service provides:
+	• Stable IP
+	• Stable DNS name
+	• Load balancing
+
+What a Service Actually Is
+A Service is a virtual network endpoint that represents a group of Pods.
+It does NOT run containers.
+
+Instead it provides:
+Stable IP → ClusterIP
+Stable DNS → service-name.namespace.svc.cluster.local
+Load balancing → across matching Pods
+
+Example:
+Service: web-service
+ClusterIP: 10.96.0.10
+
+Pods behind service:
+10.244.1.6
+10.244.2.3
+10.244.3.4
+
+Clients call the service, not the Pod.
+
+How Service Is Created
+Example YAML:
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-service
+spec:
+  selector:
+    app: web
+  ports:
+  - port: 80
+    targetPort: 8080
+
+Important fields:
+Field	Meaning
+selector	chooses Pods using labels
+port	service port
+targetPort	container port
+	
+Pods must have matching label:
+metadata:
+  labels:
+    app: web
+
+What Happens Internally When Service Is Created
+When you run:
+kubectl apply -f service.yaml
+
+The following internal steps happen.
+
+Step 1 — API Server stores Service
+Service object is stored in etcd.
+
+Example stored info:
+Name: web-service
+ClusterIP: 10.96.0.10
+Selector: app=web
+Port: 80
+TargetPort: 8080
+
+Step 2 — Endpoint Controller Finds Pods
+The Endpoint Controller watches services.
+
+It finds Pods matching selector:
+Selector: app=web
+
+Example matched Pods:
+Pod1 → 10.244.1.6
+Pod2 → 10.244.2.3
+Pod3 → 10.244.3.4
+
+Then Kubernetes creates Endpoints object.
+Endpoints:
+10.244.1.6:8080
+10.244.2.3:8080
+10.244.3.4:8080
+
+Step 3 — kube-proxy Configures Routing
+Every node runs kube-proxy.
+kube-proxy watches services and endpoints.
+
+When it sees:
+Service IP: 10.96.0.10
+Pods: 10.244.1.6, 10.244.2.3
+
+It writes iptables rules.
+
+Example rule concept:
+Destination: 10.96.0.10:80
+→ redirect to
+10.244.1.6:8080
+10.244.2.3:8080
+
+Internal Architecture of Service
+Main components involved:
+
+Client Pod
+     │
+     ▼
+DNS (CoreDNS)
+     │
+     ▼
+Service ClusterIP
+     │
+     ▼
+kube-proxy
+     │
+     ▼
+iptables rules
+     │
+     ▼
+Backend Pods
+
+Request Flow Example
+Pod A calls service:
+curl http://web-service
+
+Step 1 — DNS Resolution
+CoreDNS resolves name:
+web-service.default.svc.cluster.local
+↓
+10.96.0.10
+
+Step 2 — Packet Sent to Service IP
+Destination IP = 10.96.0.10
+Port = 80
+
+Step 3 — iptables Intercepts
+iptables rule created by kube-proxy:
+10.96.0.10:80
+→ DNAT
+→ 10.244.1.6:8080
+
+Step 4 — Pod Receives Request
+Pod 10.244.1.6
+Container port 8080
+Application responds.
+
+Load Balancing
+iptables randomly selects Pod.
+
+Example:
+Request1 → Pod1
+Request2 → Pod2
+Request3 → Pod3
+This provides round-robin load balancing.
+
+Real Example
+Imagine 3 web servers:
+Pod1 → 10.244.1.6
+Pod2 → 10.244.2.3
+Pod3 → 10.244.3.4
+
+Service:
+web-service
+IP: 10.96.0.10
+Client:
+curl http://10.96.0.10
+Traffic automatically distributed.

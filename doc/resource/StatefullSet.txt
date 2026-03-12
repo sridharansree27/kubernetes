@@ -1,0 +1,265 @@
+A StatefulSet in Kubernetes is used to run stateful applications (applications that store data and require stable identity).
+
+Examples of stateful applications:
+	• MongoDB
+	• MySQL
+	• PostgreSQL
+	• Apache Kafka
+
+These applications must keep their identity and data even if the pod restarts.
+
+What Problem StatefulSet Solves
+In Kubernetes, normal Deployments create pods like this:
+pod-abc12
+pod-xyz34
+pod-klm56
+
+If a pod dies:
+pod-abc12 → deleted
+new pod → pod-pqr78
+
+The name changes and the storage may change.
+
+For stateless apps (like web servers) this is fine.
+Example:
+Nginx
+Frontend apps
+API servers
+
+But databases cannot work like this.
+They require:
+	• Stable hostname
+	• Stable storage
+	• Ordered startup
+	• Persistent identity
+
+This is where StatefulSet comes in.
+
+What StatefulSet Provides
+StatefulSet guarantees:
+Feature	Meaning
+Stable Pod Name	pod names never change
+Stable Network Identity	each pod gets its own DNS
+Persistent Storage	each pod has its own volume
+Ordered Deployment	pods start one by one
+	
+Example pods created:
+mongodb-0
+mongodb-1
+mongodb-2
+
+Even if restarted:
+mongodb-1 → recreated → mongodb-1
+Same name.
+
+StatefulSet Architecture
+Main components:
+StatefulSet
+     │
+     ▼
+Pods (with fixed identity)
+     │
+     ▼
+PersistentVolumeClaims
+     │
+     ▼
+PersistentVolumes
+     │
+     ▼
+Storage
+
+Networking:
+Headless Service
+       │
+       ▼
+DNS per pod
+
+Example StatefulSet YAML
+Example for MongoDB cluster:
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mongodb
+spec:
+  serviceName: mongodb-service # Headless Service
+  replicas: 3
+selector:
+    matchLabels:
+      app: mongodb
+template:
+    metadata:
+      labels:
+        app: mongodb
+    spec:
+      containers:
+      - name: mongodb
+        image: mongo
+        ports:
+        - containerPort: 27017
+volumeClaimTemplates:
+  - metadata:
+      name: mongo-storage
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 5Gi
+
+Pods Created by StatefulSet
+This creates pods:
+mongodb-0
+mongodb-1
+mongodb-2
+
+Each pod has:
+mongodb-0 → volume mongo-storage-mongodb-0
+mongodb-1 → volume mongo-storage-mongodb-1
+mongodb-2 → volume mongo-storage-mongodb-2
+
+Each pod has separate storage.
+
+Networking in StatefulSet
+StatefulSet uses a Headless Service.
+
+Example:
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongodb-service
+spec:
+  clusterIP: None
+  selector:
+    app: mongodb
+  ports:
+  - port: 27017
+
+clusterIP: None means Headless Service.
+
+DNS Identity for Pods
+Each pod gets its own DNS name.
+Format:
+podname.servicename.namespace.svc.cluster.local
+
+Example:
+mongodb-0.mongodb-service.default.svc.cluster.local
+mongodb-1.mongodb-service.default.svc.cluster.local
+mongodb-2.mongodb-service.default.svc.cluster.local
+
+Now database nodes can communicate directly.
+
+Internal Working
+Let’s see what happens internally.
+
+Step 1 — StatefulSet Created
+User runs:
+kubectl apply -f statefulset.yaml
+
+Object stored in:
+	• Kubernetes API server
+	• etcd
+
+Step 2 — StatefulSet Controller Detects It
+Inside kube-controller-manager, a StatefulSet controller watches for StatefulSet objects.
+
+It sees:
+replicas = 3
+
+Step 3 — Pods Created Sequentially
+Pods are created one by one.
+
+Order:
+mongodb-0
+mongodb-1
+mongodb-2
+
+Kubernetes waits until:
+mongodb-0 running
+then creates:
+mongodb-1
+
+Step 4 — Persistent Storage Created
+For each pod:
+volumeClaimTemplates → PVC created
+
+Example:
+mongo-storage-mongodb-0
+mongo-storage-mongodb-1
+mongo-storage-mongodb-2
+
+These PVCs bind to PersistentVolumes.
+
+Step 5 — Pod Scheduled
+The kube-scheduler assigns pods to nodes.
+
+Example:
+mongodb-0 → node1
+mongodb-1 → node2
+mongodb-2 → node3
+
+Step 6 — kubelet Mounts Storage
+On each node, kubelet:
+	1. attaches volume
+	2. mounts volume
+	3. starts container
+
+Example:
+Node1
+  └── mongodb-0
+         └── /data/db → mounted volume
+
+Pod Restart Behaviour
+Suppose:
+mongodb-1 crashes
+
+Kubernetes recreates:
+mongodb-1
+Not:
+mongodb-x1
+
+Storage reused:
+mongo-storage-mongodb-1
+
+Data remains intact.
+
+StatefulSet Scaling
+Scale command:
+kubectl scale statefulset mongodb --replicas=5
+
+New pods created:
+mongodb-3
+mongodb-4
+
+Volumes created:
+mongo-storage-mongodb-3
+mongo-storage-mongodb-4
+
+Pod Deletion Order
+Deletion is also reverse order.
+
+mongodb-2 deleted
+mongodb-1 deleted
+mongodb-0 deleted
+
+This protects cluster integrity.
+
+Architecture
+               StatefulSet
+                    │
+                    ▼
+           StatefulSet Controller
+                    │
+                    ▼
+            Headless Service
+                    │
+       ┌────────────┼────────────┐
+       ▼            ▼            ▼
+     mongodb-0    mongodb-1   mongodb-2
+       │            │            │
+       ▼            ▼            ▼
+     PVC-0         PVC-1        PVC-2
+       │            │            │
+       ▼            ▼            ▼
+       PV           PV           PV
+       │            │            │
+       ▼            ▼            ▼
+     Storage      Storage      Storage

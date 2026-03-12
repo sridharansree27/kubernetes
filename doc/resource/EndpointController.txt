@@ -1,0 +1,146 @@
+What Endpoint Controller Is
+The Endpoint Controller is a Kubernetes control plane component that:
+	• Watches Service objects
+	• Watches Pod objects
+	• Finds Pods matching the Service selector
+	• Creates or updates the Endpoints resource
+
+So its job is basically:
+Service selector → find matching Pods → update Endpoints
+
+Where Endpoint Controller Exists
+The Endpoint Controller runs inside the Kubernetes Controller Manager.
+
+Component location:
+Control Plane
+│
+├── kube-apiserver
+├── etcd
+├── kube-scheduler
+└── kube-controller-manager
+        │
+        ├── Endpoint Controller
+        ├── Node Controller
+        ├── ReplicaSet Controller
+        ├── Deployment Controller
+        └── Job Controller
+
+So the Endpoint Controller is part of kube-controller-manager.
+It runs on the control plane node (master node).
+
+What Endpoints Object Is
+The Endpoint Controller creates a Kubernetes resource called Endpoints.
+
+Example:
+Service:
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-service
+spec:
+  selector:
+    app: web
+  ports:
+  - port: 80
+
+Pods:
+Pod1 → 10.244.1.5
+Pod2 → 10.244.2.3
+
+Endpoint Controller creates:
+
+Endpoints object
+Name: web-service
+Addresses:
+10.244.1.5:80
+10.244.2.3:80
+
+You can see it with:
+kubectl get endpoints
+
+Example output:
+NAME          ENDPOINTS
+web-service   10.244.1.5:80,10.244.2.3:80
+
+Internal Working Step-by-Step
+Step 1 — Service created
+kubectl apply -f service.yaml
+Service stored in etcd via API Server.
+
+Step 2 — Endpoint Controller detects service
+Endpoint Controller watches API Server.
+It sees:
+Service selector = app=web
+
+Step 3 — Controller finds matching Pods
+It scans Pods:
+Pod1 → label app=web
+Pod2 → label app=web
+Pod3 → label app=db (ignored)
+
+Matching Pods:
+10.244.1.5
+10.244.2.3
+
+Step 4 — Endpoint object created
+Controller creates:
+Endpoints:
+10.244.1.5:80
+10.244.2.3:80
+
+Stored in etcd.
+
+Step 5 — kube-proxy watches endpoints
+Each node runs kube-proxy.
+
+kube-proxy watches:
+Services
+Endpoints
+
+When endpoints change, kube-proxy updates iptables rules.
+
+Example rule concept:
+Service IP: 10.96.0.10:80
+→ Pod1 10.244.1.5:80
+→ Pod2 10.244.2.3:80
+
+What Happens When Pod Changes
+If a Pod crashes:
+Pod1 deleted
+Pod2 remains
+
+Endpoint Controller automatically updates:
+Old:
+10.244.1.5
+10.244.2.3
+New:
+10.244.2.3
+
+kube-proxy updates iptables automatically.
+
+Simple Architecture Flow
+
+User
+  │
+  ▼
+kubectl apply service
+  │
+  ▼
+API Server
+  │
+  ▼
+kube-controller-manager
+   │
+   └── Endpoint Controller
+           │
+           ▼
+      Endpoints Object
+           │
+           ▼
+      kube-proxy
+           │
+           ▼
+        iptables
+           │
+           ▼
+         Pods
