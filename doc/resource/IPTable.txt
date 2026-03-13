@@ -1,0 +1,159 @@
+What is iptables?
+	• iptables is a Linux utility to configure the packet filtering rules of the Linux kernel’s netfilter framework.
+	• Essentially, it controls network traffic: decides which packets are allowed, dropped, or modified as they pass through the system.
+	• It works at the kernel level, so it’s extremely fast and powerful.
+
+Key points:
+	• Part of netfilter, which is the Linux kernel subsystem for packet filtering, NAT (Network Address Translation), and packet mangling.
+	• Can handle both incoming and outgoing traffic.
+	• Used for firewalls, NAT, port forwarding, and traffic control.
+
+How it actually looks like
+When you check iptables rules:
+sudo iptables -L -v -n
+
+You might see:
+Chain INPUT (policy ACCEPT 0 packets, 0 bytes)
+ pkts bytes target  prot opt in  out  source      destination
+ 1000 500K ACCEPT  tcp  --  *   *    0.0.0.0/0   0.0.0.0/0   tcp dpt:22
+ 200  20K  DROP    all  --  *   *    192.168.1.5 0.0.0.0/0
+
+	• Chain: Logical set of rules (INPUT, OUTPUT, FORWARD)
+	• Target: Action (ACCEPT, DROP, REJECT, LOG, etc.)
+	• Source/Destination: Which IPs the rule applies to
+	• Protocol/Port: tcp/udp/icmp, and specific ports
+
+So iptables looks like a list of rules grouped in chains, with actions for each packet.
+
+Actual usage of iptables
+Example 1: Block incoming traffic on a port
+sudo iptables -A INPUT -p tcp --dport 80 -j DROP
+	• -A INPUT → Append to INPUT chain
+	• -p tcp → Protocol TCP
+	• --dport 80 → Destination port 80 (HTTP)
+	• -j DROP → Drop the packet
+Now, no one can access port 80 on this server.
+
+Example 2: Allow SSH
+sudo iptables -A INPUT -p tcp --dport 22 -j ACCEPT
+	• Allows incoming SSH connections.
+
+Example 3: Masquerading (NAT)
+sudo iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+	• Used in home routers to allow internal IPs to access the internet via NAT.
+
+Example 4: Log dropped packets
+sudo iptables -A INPUT -j LOG --log-prefix "IPTables-Dropped: "
+	• Logs every packet that hits this rule into /var/log/syslog.
+
+iptables architecture
+iptables works inside the Linux kernel with the following architecture:
+
+       Network Packet
+              |
+    +---+---+---+
+    | Netfilter |
+    +---+---+---+
+              |
+     Hooks in Kernel
+              |
+  +-----+-----+-----+-----+-----+-----+-----+
+  |   INPUT   | FORWARD |    OUTPUT         |
+  +-----------+---------+-------+-----+-----+
+              |
+    Chains (LISTS of rules)
+              |
+    Rules → match packet → take action (TARGET)
+
+Key components:
+	1. Netfilter Hooks
+		○ Locations in the kernel where packets are intercepted:
+			§ PREROUTING → Before routing decision
+			§ INPUT → For packets destined to local system
+			§ FORWARD → For packets being routed through the host
+			§ OUTPUT → Packets generated locally
+			§ POSTROUTING → After routing decision
+	2. Tables
+		○ Organize rules by functionality:
+		• Table	• Purpose
+		• filter	• Default; for ACCEPT/DROP/REJECT
+		• nat	• Network Address Translation
+		• mangle	• Packet alteration (TOS, TTL, mark packets)
+		• raw	• Exclude packets from connection tracking
+		• security	• Mandatory Access Control (SELinux)
+	3. Chains
+		○ Each table has chains (like INPUT, OUTPUT, FORWARD).
+		○ Chains are lists of rules that are traversed sequentially.
+	4. Rules
+		○ Each rule has match criteria (IP, port, protocol) and a target action.
+
+How iptables works internally
+	1. A packet enters the network stack.
+	2. It hits netfilter hooks (PREROUTING, INPUT, etc.).
+	3. The kernel checks which table applies (filter, nat, etc.).
+	4. The chain of rules is traversed in order.
+	5. The first matching rule decides the packet’s fate:
+		○ ACCEPT → allow packet
+		○ DROP → discard packet silently
+		○ REJECT → discard packet and reply with error
+		○ LOG → log packet for monitoring
+	6. If no rule matches, the chain policy is applied (default: ACCEPT or DROP).
+
+Internal Example: Packet flow
+Imagine a packet coming to your server at TCP port 22:
+	1. Packet enters → hits PREROUTING (NAT table maybe)
+	2. Routing decides packet is for local host → INPUT chain (filter table)
+	3. Rules checked:
+		○ Rule 1: Accept SSH port 22 → matches → packet accepted
+		○ Other rules skipped
+
+Hooks in Netfilter
+	• Hooks are kernel interception points.
+	• They are places in the network stack where the kernel pauses a packet to let netfilter/iptables inspect it.
+	• Hooks exist before the packet is delivered or routed, and are part of the Linux kernel.
+
+The main hooks:
+Hook	Where it sits & purpose
+PREROUTING	Packet enters → before routing decisions (used for NAT)
+INPUT	Packet is destined for local host
+FORWARD	Packet is being routed through host
+OUTPUT	Packet generated locally
+POSTROUTING	Packet leaves host → after routing (used for NAT)
+	
+Important: Hooks exist regardless of iptables rules. They are just “checkpoints” in the kernel.
+
+Chains in iptables
+	• Chains are logical rule lists defined in iptables.
+	• Chains reside in tables (filter, nat, mangle) and are associated with hooks.
+	• When a packet hits a hook, iptables decides which chain to process.
+
+Example:
+Chain	Table	Associated hook	Purpose
+INPUT	filter	INPUT hook	Packets destined to local host
+FORWARD	filter	FORWARD hook	Packets routed through host
+OUTPUT	filter	OUTPUT hook	Locally generated packets
+PREROUTING	nat	PREROUTING hook	Modify packets before routing
+POSTROUTING	nat	POSTROUTING hook	Modify packets after routing
+			
+Key difference:
+	• Hook = kernel checkpoint for packet inspection (low-level, always exists).
+	• Chain = iptables rule list linked to a hook (high-level, user-defined).
+
+How they work together
+Packet enters host
+        |
+     Hook: PREROUTING
+        |  ---> iptables PREROUTING chain rules applied
+        |
+Routing decision
+        |
+        |--- If local → Hook: INPUT → INPUT chain rules applied
+        |--- If forwarded → Hook: FORWARD → FORWARD chain rules applied
+        |
+Packet leaves host
+        |
+     Hook: POSTROUTING
+        | ---> iptables POSTROUTING chain rules applied
+
+	• Without a chain, a hook does nothing to the packet (iptables adds logic).
+	• Without hooks, chains would have nowhere to run—the kernel wouldn’t know where to check packets.

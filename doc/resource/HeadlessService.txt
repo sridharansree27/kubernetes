@@ -1,0 +1,127 @@
+A Headless Service in Kubernetes is a special type of Service where Kubernetes does NOT create a virtual service IP (ClusterIP).
+
+Instead, DNS directly returns the IP addresses of the Pods behind the service.
+
+This is mainly used for stateful applications where clients must connect to specific pods, not a load-balanced virtual IP.
+
+Normal Service (ClusterIP)
+Example:
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+spec:
+  selector:
+    app: web
+  ports:
+  - port: 80
+
+Kubernetes creates:
+web.default.svc.cluster.local → 10.96.20.10
+
+Flow:
+Client Pod
+    ↓
+ClusterIP (virtual IP)
+    ↓
+kube-proxy load balancing
+    ↓
+Pod1 / Pod2 / Pod3
+
+The service hides pod IPs and distributes traffic.
+
+Headless Service
+Example:
+apiVersion: v1
+kind: Service
+metadata:
+  name: db
+spec:
+  clusterIP: None
+  selector:
+    app: db
+  ports:
+  - port: 27017
+
+Here:
+clusterIP: None
+means no virtual IP is created.
+
+DNS returns pod IPs directly.
+Example
+Pods:
+db-0 → 10.244.1.5
+db-1 → 10.244.2.6
+db-2 → 10.244.1.9
+
+DNS records created by CoreDNS:
+db.default.svc.cluster.local
+
+DNS response:
+10.244.1.5
+10.244.2.6
+10.244.1.9
+
+Client connects directly to a pod.
+
+Architecture
+Headless Service architecture:
+Client Pod
+   │
+   │ DNS Query
+   ▼
+CoreDNS
+   │
+   │ reads Kubernetes Endpoints
+   ▼
+Returns Pod IPs
+   │
+   ▼
+Client connects directly to Pod
+
+Key components involved:
+Component	Role
+Service object	Defines the headless service
+Endpoints	Stores pod IPs
+CoreDNS	Converts endpoints to DNS records
+Pod network (CNI)	Routes traffic to pod
+
+What Happens Internally Step-by-Step
+Assume a pod tries to access:
+db.default.svc.cluster.local
+
+Step 1 — DNS request
+Client Pod
+   ↓
+DNS query sent to CoreDNS
+
+Step 2 — CoreDNS checks Kubernetes API
+CoreDNS reads the Endpoints object.
+
+Example endpoints:
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: db
+subsets:
+- addresses:
+  - ip: 10.244.1.5
+  - ip: 10.244.2.6
+  - ip: 10.244.1.9
+
+Step 3 — DNS response
+CoreDNS returns:
+db.default.svc.cluster.local →
+10.244.1.5
+10.244.2.6
+10.244.1.9
+
+Step 4 — Client connects
+Client chooses one IP and connects directly.
+Client Pod
+   ↓
+10.244.2.6
+   ↓
+Target Pod
+
+No kube-proxy load balancing happens.
