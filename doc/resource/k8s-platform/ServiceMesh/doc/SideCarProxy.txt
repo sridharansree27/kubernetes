@@ -1,0 +1,158 @@
+What is the Sidecar Container (Envoy)?
+The sidecar is an Envoy proxy running alongside your app container in the same pod.
+	• Same network namespace as the app container
+	• Intercepts all inbound and outbound traffic
+	• Fully controlled by IstioD (control plane)
+
+The sidecar (Envoy) does:
+	• Traffic routing (VirtualService rules)
+	• Load balancing
+	• mTLS encryption/decryption
+	• Retries, timeouts
+	• Metrics & logging(Sidecar sends its information to IstioD)
+
+Internal Architecture of Envoy
+Think of Envoy internally as 4 major layers:
+
+1. Listener Layer (Entry Point)
+This is where traffic first arrives.
+	• Envoy opens ports (listeners)
+	• Example:
+		○ Port 15001 → outbound traffic
+		○ Port 15006 → inbound traffic
+What it does:
+	• Accepts connections
+	• Decides what filter chain to apply
+
+2. Filter Chains (Processing Layer)
+Each request goes through filters like:
+	• TLS filter (mTLS)
+	• HTTP connection manager
+	• Authorization filter
+	• Telemetry filter
+
+3. Route Configuration (Routing Logic)
+Derived from VirtualService
+	• Matches:
+		○ URL path
+		○ Headers
+		○ Method
+
+Example:
+/api → v1 Subset
+/user → v2 Subset
+This decides:
+	• Which service version (subset) to call
+
+4. Cluster (Upstream Services)
+Derived from DestinationRule
+	• Each subset = one cluster
+
+Example:
+my-app|v1 → cluster1
+my-app|v2 → cluster2
+
+Cluster defines:
+	• Load balancing (round robin, least conn)
+	• Connection pool
+	• Circuit breaker
+
+5. Endpoint (Actual Pods)
+Final step
+	• Envoy maps cluster → actual pod IPs
+	• Gets this from Kubernetes via IstioD
+
+Internal Flow
+Outbound Request
+Step 1: App sends request
+http://my-app
+
+Step 2: iptables redirects traffic
+Kubernetes sets iptables rules:
+	• All traffic → Envoy (port 15001)
+
+Step 3: Envoy Listener catches it
+	• Listener identifies outbound traffic
+
+Step 4: Filter Chain executes
+	• mTLS encryption (if enabled)
+	• Policy checks
+
+Step 5: Route selection
+Uses VirtualService
+	• Matches request
+	• Chooses subset (v1/v2)
+
+Step 6: Cluster selection
+Uses DestinationRule
+	• Maps subset → cluster
+
+Step 7: Endpoint selection
+	• Applies load balancing
+	• Picks one pod IP
+
+Step 8: Send request
+Source Envoy → Destination Envoy
+
+Inbound Request
+Step 1: Request arrives at pod
+	• Before the packet reaches the application container, iptables rules (installed by Istio) in the pod’s network namespace intercept the inbound traffic (PREROUTING) and redirect it to the Envoy sidecar’s inbound listener (port 15006). Envoy processes the request and then forwards it to the application container.
+
+Step 2: Listener (15006)
+	• Handles inbound traffic
+
+Step 3: Filter Chain
+	• mTLS decryption
+	• AuthZ checks
+	• Metrics collection
+
+Step 4: Forward to App
+Envoy → App Container
+
+How Envoy Gets Configuration
+Envoy does NOT decide anything on its own.
+	• It gets config from IstioD using xDS APIs
+
+xDS APIs
+API	Purpose
+LDS	Listeners
+RDS	Routes (VirtualService)
+CDS	Clusters (DestinationRule)
+EDS	Endpoints (Pods)
+
+Flow:
+	1. IstioD watches Kubernetes
+	2. Converts configs
+	3. Pushes to Envoy
+	4. Envoy updates dynamically (no restart)
+
+iptables (Traffic Interception)
+Istio uses iptables rules to transparently redirect pod traffic through the Envoy sidecar:
+	1. Init Container Injection 
+		○ Istio injects an init container into the pod at deployment time. 
+		○ The init container sets up iptables rules before the app container starts. 
+	2. Traffic Redirection 
+		○ Outbound traffic (from app → other services) is redirected to Envoy’s outbound listener (default port 15001). 
+		○ Inbound traffic (from other pods → this pod) is redirected to Envoy’s inbound listener (default port 15006). 
+		○ iptables ensures all TCP traffic passes through Envoy without the app being aware.
+
+Advanced Internal Concepts
+1. Connection Pooling
+	• Reuses connections
+	• Improves performance
+2. Circuit Breaking
+	• Stops calling unhealthy services
+3. Retry Logic
+	• Automatically retries failed requests
+4. Observability
+Envoy generates:
+	• Metrics → Prometheus
+	• Traces → Jaeger
+	• Graphs → Kiali
+
+One Complete Mental Model
+Think like this:
+App → (iptables) → Envoy
+Envoy:
+   Listener → Filters → Routes → Cluster → Endpoint
+→ Destination Envoy → App

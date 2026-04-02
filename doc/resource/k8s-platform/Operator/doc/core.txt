@@ -1,0 +1,206 @@
+What are Operators?
+Operators are used to bundle, package, deploy, and manage Kubernetes applications (controllers).
+They extend Kubernetes by adding custom logic (domain-specific knowledge) to manage applications automatically.
+
+Helm Charts vs Operators
+Helm Charts
+	• Good for initial deployment of applications.
+	• However, they lack reconciliation capability:
+		○ If a user manually modifies a resource (e.g., changes a service port), Helm cannot detect or revert this drift automatically.
+	• For upgrades:
+		○ If a new version of the controller/application is released, we must manually upgrade using a new Helm chart.
+
+Operators
+Operators overcome Helm limitations by adding intelligence.
+	• Provide Reconciliation (Auto-healing):
+		○ Continuously watch the cluster state.
+		○ If any resource is modified manually, the operator reverts it back to the desired state.
+	• Support Automatic Upgrades:
+		○ Operator logic can handle version upgrades automatically (depending on implementation).
+	• Multi-instance capability:
+		○ A single operator can manage multiple instances of an application across namespaces
+(e.g., multiple Istio control planes using one operator).
+	• Built-in Observability / Telemetry:
+		○ Many operators expose metrics, logs, and health status.
+
+How Operators are Built
+Operators can be written using:
+	1. Go (Golang) → Full capability (most powerful)
+	2. Ansible → Medium capability
+	3. Helm-based operators → Limited capability
+
+Frameworks Used
+	• Most operators are built using Operator SDK
+	• Internally, operators use the Controller pattern via the Kubernetes controller-runtime (controller manager framework).
+
+Types of Operators
+	• Prometheus Operator
+	• Istio Operator
+	• Elasticsearch Operator
+	• Argo CD Operator
+
+OperatorHub
+	• OperatorHub.io
+	• A centralized repository of certified and community Kubernetes Operators
+	• You can browse and download operators from here
+
+Operator Lifecycle Manager (OLM)
+	• Runs inside a Kubernetes cluster
+	• Helps manage the lifecycle of operators
+Key Features:
+	• Installs operators from OperatorHub bundles
+	• Verifies bundle authenticity before installation
+	• Manages:
+		○ Installation
+		○ Upgrades
+		○ Dependency resolution
+Note:
+	• Operators can also be installed without OLM (manually using manifests or Helm)
+
+Components of an Operator
+An Operator is built using three main pieces:
+
+1. Custom Resource Definition (CRD)
+	• Extends Kubernetes API
+	• Defines a new resource type
+Example:
+apiVersion: mycompany.com/v1
+kind: App
+metadata:
+  name: my-app
+spec:
+  replicas: 3
+  version: v1
+Now Kubernetes understands a new object: App
+
+2. Custom Resource (CR)
+	• An instance of the CRD
+	• Represents the desired state
+Example:
+kind: App
+spec:
+  replicas: 3
+
+3. Controller (Operator Logic)
+	• Watches CRs
+	• Takes actions to match desired state vs actual state
+Built using frameworks like:
+	• Operator SDK
+
+Operator Internal Workflow
+Step 1: User Applies Custom Resource
+kubectl apply -f app.yaml
+	• Request goes to API Server
+	• CR is validated
+	• Stored in etcd
+
+Step 2: Operator Watches the Resource
+Operator runs a loop called:
+Reconcile Loop
+	• Watches for:
+		○ New CR created
+		○ CR updated
+		○ CR deleted
+
+Reconciliation Logic
+Reconcile Function
+Desired State (from CR)
+        ↓
+Compare
+        ↓
+Actual Cluster State
+        ↓
+Take Actions
+
+Example
+Let’s say:
+spec:
+  replicas: 3
+
+Case 1: Pods = 0
+Operator will:
+	• Create Deployment/Pods
+
+Case 2: Pods = 2
+Operator will:
+	• Create 1 more Pod
+
+Case 3: User deletes a Pod manually
+Operator will:
+	• Detect mismatch
+	• Recreate the Pod (auto-healing)
+
+Continuous Loop
+Operator does NOT run once.
+It continuously runs:
+Watch → Compare → Act → Repeat
+This is called Declarative State Management
+
+Internal Architecture
+Components involved:
+	1. API Server
+	2. etcd
+	3. Informer (Watcher)
+	4. Work Queue
+	5. Reconcile Loop
+
+Flow:
+	1. Informer watches CR changes
+	2. Event added to queue
+	3. Reconcile function triggered
+	4. Operator:
+		○ Reads CR (desired state)
+		○ Checks actual resources
+		○ Applies changes
+
+Important Concepts
+Idempotency
+	• Running reconcile multiple times gives same result
+	• Safe and repeatable
+
+Event-driven + Periodic
+	• Triggered by:
+		○ Changes (create/update/delete)
+		○ Timers (resync)
+
+Finalizers
+	• Used during deletion
+Example:
+	• Before deleting CR:
+		○ Clean DB
+		○ Delete external resources
+
+Istio Operator – Example
+When you apply:
+kind: IstioOperator
+spec:
+  profile: demo
+
+What happens?
+	1. CR stored in etcd
+	2. Istio Operator detects it
+	3. Operator creates:
+		○ Deployments (istiod)
+		○ Services
+		○ ConfigMaps
+	4. Keeps monitoring everything
+
+If user deletes istiod Pod:
+Operator:
+	• Detects mismatch
+	• Recreates it automatically
+
+Flow
+User → kubectl apply CR
+        ↓
+API Server → etcd
+        ↓
+Operator watches CR
+        ↓
+Reconcile loop triggered
+        ↓
+Compare desired vs actual
+        ↓
+Create/Update/Delete resources
+        ↓
+Repeat forever

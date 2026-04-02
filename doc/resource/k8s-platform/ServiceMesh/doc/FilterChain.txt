@@ -1,0 +1,233 @@
+What is a Filter Chain?
+A filter chain is a sequence of processing steps that every request goes through inside Envoy.
+
+Think of it like a pipeline:
+Request → Filter1 → Filter2 → Filter3 → ... → Forward
+
+Each filter:
+	• Inspects the request
+	• Modifies it (optional)
+	• Decides what to do next
+
+Where Filter Chains Exist
+
+Envoy has filter chains in:
+1. Listener (Connection level)
+	• Handles incoming connections
+	• Chooses which filter chain to use
+
+What the App Sends
+When your app makes an HTTP or HTTPS request:
+GET /api/products HTTP/1.1
+Host: my-app
+	• On the wire, HTTP request is serialized into TCP packets
+	• HTTPS is encrypted → still TCP packets at the network layer
+
+What Envoy Receives
+Envoy lives in the same network namespace as the app:
+	• It shares the Pod IP with the app
+	• It listens on inbound (15006) and outbound (15001) ports
+	
+How traffic reaches Envoy
+Istio injects iptables rules:
+
+Outbound traffic (from app to other pods)
+OUTPUT chain → redirect to 15001 (Envoy outbound listener)
+
+Inbound traffic (from another pod to this pod)
+PREROUTING chain → redirect to 15006 (Envoy inbound listener)
+
+Why Envoy sees “raw packets”
+Even though the app sends HTTP/HTTPS:
+	• Network layer only deals with packets
+	• The kernel sees TCP segments
+	• iptables redirects these packets to Envoy’s listener port
+	• Envoy gets the TCP stream, not a pre-parsed HTTP request
+So at this stage:
+Raw TCP stream → Envoy
+
+How HTTP/HTTPS is Reconstructed
+HTTP (unencrypted)
+	• Envoy reads TCP stream
+	• Parses bytes into:
+		○ Method, URL, headers
+		○ Body
+	• Done by HTTP Connection Manager
+
+HTTPS (encrypted)
+	• Envoy uses TLS/mTLS filter to decrypt first
+	• After decryption → HTTP Connection Manager parses the request
+
+So technically, Envoy never sees a “ready HTTP object” on the wire — it builds it from raw TCP bytes.
+
+Flow
+Listener → Filter Chain → HTTP Connection Manager → HTTP Filters → Routing → Cluster
+
+2. HTTP Processing (Inside HTTP Connection Manager)
+	• Handles actual request logic (routing, retries, etc.)
+
+Internal Working
+Step 1: Listener Receives Traffic
+Envoy listens on ports:
+	• 15001 → outbound
+	• 15006 → inbound
+When request comes:
+	• Envoy checks listener rules
+	• Picks a filter chain
+
+Step 2: Filter Chain Selection
+Filter chain is selected based on:
+	• Destination port
+	• Protocol (HTTP/TCP)
+	• TLS vs non-TLS
+	• SNI (for HTTPS)
+
+Step 3: Network Filters Execute
+These are L4 filters (connection level)
+
+Common ones:
+TLS Inspector
+	• Detects if traffic is TLS
+	• Extracts SNI
+mTLS Filter
+	• Handles encryption/decryption
+
+Step 4: HTTP Connection Manager (HCM)
+Once traffic is identified as HTTP:
+	• Envoy passes it to HCM
+	• HCM runs HTTP filters
+
+HTTP Filter Chain
+Now the real processing starts.
+
+Typical Filter Order in Istio
+1. AuthN (Authentication)
+2. AuthZ (Authorization)
+3. Stats / Telemetry
+4. Routing
+
+Authentication Filter (AuthN)
+Verifies identity
+	• Validates mTLS certificates
+	• Extracts service identity
+
+Example:
+Is this request from valid service?
+
+Authorization Filter (AuthZ)
+Applies policies
+
+Example:
+Allow only service A to call service B
+
+If not allowed:
+	• Request is rejected here
+
+Telemetry Filter
+Collects metrics
+	• Request count
+	• Latency
+	• Errors
+Used by:
+	• Prometheus
+	• Kiali
+
+Routing Filter (Router)
+	• Uses VirtualService rules
+	• Chooses:
+		○ Destination service
+		○ Subset (v1/v2)
+		○ Weight
+
+Example
+Scenario
+	• Request: GET /api/users
+
+Flow inside Envoy
+Listener
+	• Accepts request
+
+TLS Filter
+	• Decrypts (if mTLS)
+
+HCM starts HTTP filters
+
+AuthN Filter
+	• Valid certificate
+
+AuthZ Filter
+	• Allowed to access /api
+
+Telemetry
+	• +1 request recorded
+
+Routing Filter(Virtual Service)
+	• Match: /api → v2 Subset or Cluster
+
+Cluster / Upstream Filter 
+	• After route filter selects a cluster, Envoy passes the request to the cluster / connection pool. 
+	• Here, DestinationRule config is applied: 
+		○ Subset mapping → selects subset of pods 
+		○ Load balancing → round robin, least connections, etc. 
+		○ mTLS → applies TLS context if configured 
+		○ Circuit breakers / connection pool parameters
+
+Step 5: TLS/mTLS Encryption (Outbound Filter)
+After HCM, Envoy applies the TLS/mTLS outbound network filter:
+	• Converts plaintext HTTP request → TLS-encrypted payload 
+	• Uses the client certificate (sidecar’s identity, issued by Istio Citadel / Istiod) 
+	• Prepares TCP stream with encrypted bytes
+Key point: mTLS encryption happens after HCM and HTTP filters, just before sending out to network.
+
+Step 6: Network / iptables
+	• TCP packets are sent over the pod network (CNI) to Pod B
+	• iptables rules are transparent — Envoy just sends to Pod B’s IP / Envoy listener port
+
+Step 7: Destination Sidecar (Pod B Envoy)
+	1. Listener receives the TCP stream
+	2. mTLS inbound filter decrypts the payload using Pod B’s certificate
+	3. Decrypted TCP bytes go to HCM, which reconstructs HTTP request
+	4. HTTP filters run: AuthN, AuthZ, metrics, VirtualService routing (if needed)
+	5. Forward to Pod B application container
+
+Important Internal Behaviour
+Filters are sequential
+Order matters:
+	• Auth must happen before routing
+	• Telemetry must capture final decision
+
+Filters can stop request
+Example:
+	• AuthZ fails → request blocked immediately
+
+Filters can modify request
+Example:
+	• Add headers
+	• Rewrite URL
+
+Where VirtualService Fits
+VirtualService rules are used inside routing filter
+
+Where DestinationRule Fits
+DestinationRule is used:
+	• After routing
+	• During cluster selection
+
+Internal Execution
+Incoming Request
+   ↓
+Listener selects filter chain
+   ↓
+Network filters (TLS, etc.)
+   ↓
+HTTP Connection Manager
+   ↓
+HTTP Filters:
+   → AuthN
+   → AuthZ
+   → Telemetry
+   → Routing
+   ↓
+Cluster selection (DestinationRule)
+   ↓
+Forward request

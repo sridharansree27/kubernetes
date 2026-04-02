@@ -1,0 +1,81 @@
+1. What is an Admission Controller in Kubernetes?
+Definition:
+	• An admission controller is a piece of code that intercepts requests to the Kubernetes API after authentication and authorization but before the object is persisted in etcd.
+	• It can:
+		○ Validate resources → accept or reject them (ValidationAdmissionWebhook)
+		○ Mutate resources → change them before storing (MutatingAdmissionWebhook)
+
+Example Flow in Kubernetes
+Client → Kubernetes API Server
+       → Authentication & Authorization
+       → Admission Controllers
+       → etcd (if accepted)
+
+2. Types of Admission Controllers
+Type	Function	Example
+Mutating Admission	Modify the resource before storing	Add sidecar, set default labels
+Validating Admission	Validate object and reject if invalid	Check allowed container images
+Built-in controllers	Some are static, e.g., NamespaceLifecycle	Prevent deleting kube-system namespace
+
+3. Example of Admission Controller
+Suppose you want every Pod to have a label env=dev.
+
+Mutating webhook example:
+	1. Create a webhook server (Python/Go) that listens to CREATE Pod requests.
+	2. When a Pod is created:
+apiVersion: v1
+kind: Pod
+metadata:
+  name: my-app
+  # no labels
+spec:
+  containers:
+  - name: nginx
+    image: nginx
+	3. Admission controller intercepts → adds label env=dev:
+metadata:
+  labels:
+    env: dev
+	4. Pod is stored in etcd with the label applied automatically.
+
+4. How Istio Uses Admission Controllers
+Istio uses a mutating admission controller called istio-sidecar-injector.
+Purpose: Automatically inject Envoy sidecars into pods.
+
+Step 1: Install Istio
+	• istioctl install or Helm deploys the istio-sidecar-injector webhook in the API server.
+
+Step 2: Create Pod
+apiVersion: v1
+kind: Pod
+metadata:
+  name: my-app
+spec:
+  containers:
+  - name: my-app
+    image: my-app:1.0
+
+Step 3: Admission Controller Intercepts
+	1. API server receives Pod creation request.
+	2. istio-sidecar-injector webhook is called (mutating webhook).
+	3. Webhook injects Envoy container and modifies the pod spec:
+spec:
+  containers:
+  - name: my-app
+    image: my-app:1.0
+  - name: istio-proxy
+    image: envoyproxy/envoy:v1.x
+	4. Labels/annotations are also added (sidecar.istio.io/inject: "true").
+	5. Pod is persisted in etcd with the injected sidecar.
+
+Step 4: Traffic Flow After Injection
+Pod traffic → iptables → Envoy sidecar → other pods/services
+
+Now, IstioD (Pilot) can manage traffic because the pod has a sidecar.
+
+5. Advantages of Using Admission Controllers in Istio
+Advantage	How it Works in Istio
+Automatic	Developers don’t need to modify pod YAML manually
+Declarative	Enable via namespace annotation (istio-injection=enabled)
+Consistent	All pods in a namespace get Envoy sidecars
+Dynamic	Can be updated or disabled anytime without redeploying pods

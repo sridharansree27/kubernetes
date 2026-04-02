@@ -1,0 +1,124 @@
+1. What is a CRD (in Kubernetes)?
+A CustomResourceDefinition (CRD) lets you extend Kubernetes API with your own resource types
+
+Example (Normal K8s vs CRD)
+Built-in resource:
+kubectl get pods
+
+Istio CRD:
+kubectl get virtualservices
+	• VirtualService is NOT built into Kubernetes
+	• Istio adds it using CRD
+
+ What CRD does internally
+When you install Istio:
+	• It registers new types in API server:
+		○ VirtualService
+		○ DestinationRule
+		○ Gateway
+		○ etc.
+	• Now Kubernetes treats them like native objects
+
+2. Important Istio CRDs
+Traffic Management
+	• VirtualService → routing rules
+	• DestinationRule → subsets + policies
+	• Gateway → external traffic entry
+Security
+	• PeerAuthentication → mTLS settings
+	• AuthorizationPolicy → access control
+Observability
+	• Telemetry configs
+
+3. Internal Working of CRDs in Istio
+
+Step 1: You Apply a CRD
+Example:
+kubectl apply -f virtualservice.yaml
+
+Step 2: Kubernetes API Server
+	• Validates against CRD schema
+	• Stores object in etcd
+At this point:
+	• Kubernetes does NOT understand meaning
+	• It just stores it
+
+Step 3: IstioD Watches CRDs
+IstioD uses Kubernetes informers
+
+It continuously watches:
+VirtualService
+DestinationRule
+Gateway
+
+Step 4: IstioD Processes Config
+IstioD converts CRDs into:
+	• Routing rules
+	• Clusters
+	• Security policies
+
+Step 5: Convert to Envoy Config
+
+CRDs → xDS format:
+CRD	Converted to
+VirtualService	RDS (Routes)
+DestinationRule	CDS (Clusters)
+Endpoints	EDS
+Gateway	LDS
+
+Step 6: Push to Envoy
+IstioD sends config using xDS APIs
+	• Dynamic update
+	• No restart
+No Kubelet is involved instead uses xDS APIs to update sidecar configuration dynamically
+
+Step 7: Envoy Executes
+	• Applies routing
+	• Applies security
+	• Sends traffic
+
+Example
+Scenario
+You want:
+	• 80% → v1
+	• 20% → v2
+
+Step 1: Create DestinationRule
+subsets:
+- name: v1
+  labels:
+    version: v1
+- name: v2
+  labels:
+    version: v2
+
+Step 2: Create VirtualService
+route:
+- destination: v1
+  weight: 80
+- destination: v2
+  weight: 20
+
+What happens internally
+1. Stored in etcd
+	• Just YAML data
+
+2. IstioD reads it
+	• Understands:
+Split traffic between v1 and v2
+
+3. IstioD generates Envoy config
+Route:
+  my-app → v1 (80%), v2 (20%)
+
+Clusters:
+  my-app|v1
+  my-app|v2
+
+4. Envoy receives config
+Now Envoy knows:
+	• How to route
+	• Which pods belong to v1/v2
+
+5. Request comes
+Envoy applies rule → picks version → sends request

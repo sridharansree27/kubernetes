@@ -1,0 +1,469 @@
+Argo CD: GitOps Continuous Delivery for Kubernetes
+
+1. Introduction
+Argo CD is a declarative, GitOps-based continuous delivery tool designed specifically for Kubernetes.
+Traditional CI/CD tools like Jenkins or GitLab CI follow a push-based deployment model, where pipelines push manifests into the cluster. This approach introduces challenges such as:
+	• Managing cluster credentials externally
+	• Limited visibility into real-time cluster state
+	• Drift between desired and actual state
+Argo CD solves these issues by adopting a pull-based GitOps model, where it runs inside the Kubernetes cluster and continuously ensures that the cluster state matches the desired state defined in Git.
+
+2. GitOps and Pull-Based Workflow
+2.1 GitOps Principles
+Argo CD implements GitOps based on the following principles:
+	• Declarative configuration: All Kubernetes manifests are stored in Git.
+	• Version control: Git tracks every change.
+	• Automated reconciliation: System continuously enforces desired state.
+	• Self-healing: Drift is automatically corrected.
+
+2.2 Pull-Based Architecture
+Unlike push-based systems:
+	• Argo CD pulls changes from Git
+	• It compares:
+		○ Desired state (Git)
+		○ Live state (Kubernetes cluster)
+Workflow:
+	1. Developer commits changes to Git
+	2. Argo CD detects changes
+	3. Compares Git vs cluster
+	4. Applies required changes to sync state
+
+2.3 Continuous Monitoring
+Argo CD continuously monitors:
+	• Git repositories
+	• Kubernetes cluster resources
+It detects:
+	• Configuration drift
+	• Manual changes
+	• Missing or extra resources
+
+2.4 Automated Sync
+Argo CD supports:
+	• Manual sync
+	• Automatic sync
+Automatic sync features:
+	• Self-heal → revert manual changes
+	• Prune → delete removed resources
+
+3. Argo CD Architecture
+Argo CD runs inside Kubernetes and has these components:
+
+3.1 API Server
+	• Entry point (UI + CLI) 
+	• Handles login, RBAC 
+Example:
+You click “Sync” in UI → API Server receives it
+
+3.2 Repository Server
+Responsible for:
+	• Cloning Git repo 
+	• Reading manifests 
+Supports:
+	• YAML 
+	• Helm 
+	• Kustomize 
+
+3.3 Application Controller
+Responsibilities:
+	• Compare desired vs live state 
+	• Perform sync 
+	• Run reconciliation loop 
+
+3.4 Redis
+	• Cache for performance
+
+4. Core Custom Resources (CRDs)
+Argo CD extends Kubernetes using CRDs.
+
+4.1 Application CRD
+Defines:
+	• Source (Git repo, path, revision)
+	• Destination (cluster, namespace)
+
+Example:
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+spec:
+  source:
+    repoURL: https://github.com/example/repo
+    path: manifests
+    targetRevision: HEAD
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+
+4.2 AppProject CRD
+Used for:
+	• Logical grouping of applications
+	• RBAC control
+	• Restricting:
+		○ Repositories
+		○ Clusters
+		○ Namespaces
+
+Example:
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: ecommerce-project
+  namespace: argocd
+spec:
+  description: Project for ecommerce applications
+
+  # Allowed Git repositories
+  sourceRepos:
+    - https://github.com/company/ecommerce-*
+
+  # Allowed destination clusters and namespaces
+  destinations:
+    - namespace: dev
+      server: https://kubernetes.default.svc
+    - namespace: prod
+      server: https://kubernetes.default.svc
+
+  # Allowed Kubernetes resources
+  clusterResourceWhitelist:
+    - group: '*'
+      kind: '*'
+
+  # Namespace-level restrictions
+  namespaceResourceWhitelist:
+    - group: apps
+      kind: Deployment
+    - group: ''
+      kind: Service
+
+  # RBAC roles inside project
+  roles:
+    - name: dev-team
+      description: Developer access
+      policies:
+        - p, proj:ecommerce-project:dev-team, applications, get, ecommerce-project/*, allow
+        - p, proj:ecommerce-project:dev-team, applications, sync, ecommerce-project/*, allow
+      groups:
+        - dev-group
+
+5. Sync Mechanism
+5.1 Sync Status
+	• Synced → Git and cluster match
+	• OutOfSync → Differences exist
+
+5.2 Sync Policies
+Manual Sync
+	• User triggers deployment
+Automatic Sync
+Options:
+	• selfHeal: true
+	• prune: true
+
+5.3 Sync Phases
+	• PreSync
+	• Sync
+	• PostSync
+
+5.4 Sync Waves
+	• Control order of resource deployment
+
+6. Deployment Strategies
+Argo CD supports:
+	• Rolling updates
+	• Blue/Green deployments
+	• Canary deployments (via integrations like Istio)
+
+7. Configuration Management Tools
+Argo CD supports multiple tools:
+7.1 Helm
+	• Deploy Helm charts
+	• Override values
+7.2 Kustomize
+	• Environment overlays
+	• Patch-based customization
+7.3 Plain YAML
+	• Direct Kubernetes manifests
+
+8. Key Features and Benefits
+8.1 Easy Rollback
+	• Revert Git commit
+	• Argo CD automatically restores previous state
+
+8.2 Disaster Recovery
+	• Recreate cluster using Git repo
+	• No manual configuration needed
+
+8.3 Enhanced Security
+	• No external cluster credentials needed
+	• Access controlled via Git and RBAC
+
+8.4 Real-Time Visibility
+	• UI dashboard shows:
+		○ Application health
+		○ Sync status
+		○ Logs and events
+
+9. Multi-Cluster Management in Argo CD
+Overview
+Argo CD supports managing multiple Kubernetes clusters from a single control plane.
+
+This means:
+	• One Argo CD instance can deploy and manage applications across Dev, Staging, and Production clusters
+
+Why Multi-Cluster?
+In real-world systems, applications are deployed in multiple environments:
+
+Environment	Purpose
+Dev	Development & testing
+Staging	Pre-production validation
+Production	Live user traffic
+	
+Each environment usually runs in:
+	• Separate namespaces OR
+	• Separate clusters (recommended for isolation)
+
+Architecture
+               Argo CD (Control Plane)
+                        │
+        ┌───────────────┬───────────────
+        │               │               │
+  Dev Cluster    Staging Cluster    Prod Cluster
+
+Argo CD connects to multiple clusters using:
+	• Kubernetes API credentials
+	• Service accounts
+
+How clusters are registered
+argocd cluster add <cluster-context>
+This:
+	• Adds cluster credentials to Argo CD
+	• Stores them securely (in secrets)
+
+How Argo CD deploys to multiple clusters
+To deploy the same app to dev, staging, prod, you create separate Applications
+
+Dev Application
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: my-app-dev
+spec:
+  source:
+    repoURL: https://github.com/company/app.git
+    path: k8s
+  destination:
+    server: https://dev-cluster-api
+    namespace: dev
+
+Staging Application
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: my-app-staging
+spec:
+  source:
+    repoURL: https://github.com/company/app.git
+    path: k8s
+  destination:
+    server: https://staging-cluster-api
+    namespace: staging
+
+Production Application
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: my-app-prod
+spec:
+  source:
+    repoURL: https://github.com/company/app.git
+    path: k8s
+  destination:
+    server: https://prod-cluster-api
+    namespace: prod
+
+What “Single Argo CD manages multiple clusters” actually means
+It does NOT mean:
+	One Application deploys everywhere
+It means:
+	One Argo CD instance can manage many Applications, each pointing to different clusters
+
+Think like this
+Application	Cluster
+my-app-dev	Dev cluster
+my-app-staging	Staging cluster
+my-app-prod	Prod cluster
+
+How it works internally
+	1. You create 3 Application CRs
+	2. Argo CD Application Controller:
+		○ Reads each Application
+		○ Looks at destination.server
+		○ Connects to that cluster
+		○ Deploys there
+
+Advanced Approach
+Instead of writing 3 separate YAMLs manually, use:
+ApplicationSet (automation)
+With ApplicationSet, you can generate multiple Applications automatically.
+
+Example
+generators:
+  - list:
+      elements:
+        - cluster: dev
+          url: https://dev-cluster-api
+        - cluster: staging
+          url: https://staging-cluster-api
+        - cluster: prod
+          url: https://prod-cluster-api
+This generates:
+	• my-app-dev
+	• my-app-staging
+	• my-app-prod automatically
+
+Same Argo CD can deploy to:
+	• dev cluster
+	• staging cluster
+	• prod cluster
+
+4. Environment Strategies
+There are 3 common strategies to manage multiple environments:
+
+Strategy 1: Git Branches
+
+Concept
+Use different Git branches for each environment.
+
+Example Repo
+repo:
+  main        → production
+  staging     → staging
+  dev         → development
+
+Application Example
+Dev App
+spec:
+  source:
+    repoURL: https://github.com/company/app.git
+    targetRevision: dev
+  destination:
+    namespace: dev
+
+Prod App
+spec:
+  source:
+    repoURL: https://github.com/company/app.git
+    targetRevision: main
+  destination:
+    namespace: prod
+
+Advantages
+	• Simple to understand
+	• Clear separation
+
+Disadvantages
+	• Branch drift issues
+	• Hard to maintain consistency
+
+Example
+Developer workflow:
+	1. Commit code to dev branch → deployed to Dev
+	2. Merge to staging → deployed to Staging
+	3. Merge to main → deployed to Prod
+
+Strategy 2: Kustomize Overlays
+
+Concept
+Use:
+	• Base configuration
+	• Environment-specific overlays
+
+Repo Structure
+repo/
+  base/
+    deployment.yaml
+  overlays/
+    dev/
+      kustomization.yaml
+    staging/
+      kustomization.yaml
+    prod/
+      kustomization.yaml
+
+Base Deployment
+apiVersion: apps/v1
+kind: Deployment
+spec:
+  replicas: 1
+  template:
+    spec:
+      containers:
+        - name: app
+          image: myapp:v1
+
+Dev Overlay
+patches:
+  - target:
+      kind: Deployment
+    patch: |
+      spec:
+        replicas: 1
+
+Prod Overlay
+patches:
+  - target:
+      kind: Deployment
+    patch: |
+      spec:
+        replicas: 5
+
+Application Example
+spec:
+  source:
+    path: overlays/prod
+  destination:
+    namespace: prod
+
+Advantages
+	• Single source of truth
+	• Clean separation of config
+	• No duplication
+
+Disadvantages
+	• Slight learning curve
+
+Example
+Same app:
+	• Dev → 1 replica
+	• Prod → 5 replicas
+Only config changes, not code
+
+Strategy 3: Separate Repositories
+
+Concept
+Use different Git repos per environment.
+
+Example
+app-dev-repo
+app-staging-repo
+app-prod-repo
+
+Application Example
+Dev
+spec:
+  source:
+    repoURL: https://github.com/company/app-dev
+
+Prod
+spec:
+  source:
+    repoURL: https://github.com/company/app-prod
+
+Advantages
+	• Strong isolation
+	• Independent access control
+
+Disadvantages
+	• Duplication of configs
+	• Hard to maintain consistency
+
+Example
+	• Dev team modifies dev repo
+	• Only senior team can access prod repo
