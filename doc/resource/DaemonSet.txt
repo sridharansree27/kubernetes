@@ -1,0 +1,586 @@
+A DaemonSet in Kubernetes is a special workload resource that ensures a specific Pod runs on every node (or a selected subset of nodes) in your cluster.
+
+What is a DaemonSet
+Think of a DaemonSet like this:
+“Run one copy of this Pod on every node automatically.”
+
+Real-world analogy:
+Imagine you manage 10 servers and want:
+	• A log collector on every server
+	• A monitoring agent on every server
+Instead of manually deploying to each node, you use a DaemonSet.
+
+Common Use Cases
+	• Logging agents (e.g., Fluentd)
+	• Monitoring agents (e.g., Node Exporter)
+	• Security agents
+	• Network plugins (CNI)
+
+Components involved:
+	1. DaemonSet Controller
+		○ Runs inside Kubernetes Control Plane
+		○ Watches for:
+			§ New nodes
+			§ Deleted nodes
+			§ Pod failures
+	2. Kubelet (on each node)
+		○ Ensures the Pod assigned to that node is running
+	3. Scheduler (partially involved)
+		○ DaemonSet mostly bypasses normal scheduling
+		○ Controller directly assigns Pods to nodes
+
+How DaemonSet Works Internally
+Step 1: You create a DaemonSet
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: log-agent
+spec:
+  selector:
+    matchLabels:
+      app: log-agent
+  template:
+    metadata:
+      labels:
+        app: log-agent
+    spec:
+      containers:
+      - name: log-agent
+        image: fluentd
+
+Step 2: Stored in etcd
+	• The DaemonSet object is stored in Kubernetes datastore (etcd)
+
+Step 3: DaemonSet Controller reacts
+	• The controller:
+		○ Lists all nodes
+		○ Decides which nodes should run the Pod
+For each node → create one Pod
+
+Step 4: Pod assignment to nodes
+	• Unlike Deployment:
+		○ DaemonSet sets .spec.nodeName directly
+		○ So scheduler is mostly bypassed
+
+Step 5: Kubelet runs the Pod
+	• Each node’s kubelet:
+		○ Pulls the image
+		○ Starts the container
+
+Step 6: Continuous reconciliation
+DaemonSet controller keeps checking:
+Event	Action
+New node added	New Pod created
+Node removed	Pod deleted
+Pod crashes	Recreated
+Label change	Pod added/removed accordingly
+
+Flow
+User → API Server → etcd
+         ↓
+DaemonSet Controller watches
+         ↓
+Creates Pod per node
+         ↓
+Kubelet runs Pods on each node
+         ↓
+Controller continuously reconciles
+
+Example
+You have 3 nodes:
+Node1
+Node2
+Node3
+
+You apply DaemonSet → result:
+Node1 → log-agent Pod
+Node2 → log-agent Pod
+Node3 → log-agent Pod
+
+If a new node comes:
+Node4 → log-agent Pod (automatically)
+DaemonSet vs Deployment
+Feature	DaemonSet	Deployment
+Pod per node	Yes	No
+Scaling	Based on nodes	Manual replicas
+Use case	System-level agents	Applications
+Scheduler	Mostly bypassed	Fully used
+
+Advanced Concepts
+1. Node Selection
+You can restrict DaemonSet to specific nodes:
+nodeSelector:
+  disktype: ssd
+
+2. Taints & Tolerations
+DaemonSets can run even on master/control-plane nodes:
+tolerations:
+- key: node-role.kubernetes.io/master
+  effect: NoSchedule
+
+3. Update Strategy
+updateStrategy:
+  type: RollingUpdate
+	• Updates Pods node-by-node
+
+4. Static vs Dynamic Nature
+	• Automatically adapts to:
+		○ Cluster scaling
+		○ Node failures
+
+Internal Deep Dive
+Does it use Scheduler?
+Initially: No (mostly bypassed)
+	• Controller sets nodeName
+Later versions:
+	• Can use scheduler with node affinity
+
+Who creates Pods?
+DaemonSet Controller, NOT the scheduler
+
+Where does reconciliation happen?
+Inside Controller Manager
+
+What happens if Pod is deleted manually?
+Controller recreates it immediately
+
+###
+
+You do NOT manually specify nodes in most cases.
+DaemonSet automatically creates Pods on all eligible nodes.
+
+How Node Selection Works in DaemonSet
+Default Behavior
+If you define a DaemonSet like this:
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: log-agent
+spec:
+  template:
+    spec:
+      containers:
+      - name: agent
+        image: fluentd
+You did NOT mention any nodes
+What happens?
+	• DaemonSet controller:
+		○ Lists all nodes
+		○ Creates 1 Pod per node
+Node1 → Pod
+Node2 → Pod
+Node3 → Pod
+
+Fully automatic — no manual node config needed
+
+When DO you specify nodes?
+Only when you want control over placement
+Option 1: nodeSelector
+spec:
+  template:
+    spec:
+      nodeSelector:
+        disktype: ssd
+
+What happens?
+	• Pods only run on nodes with label: disktype=ssd
+
+Option 2: Node Affinity
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: region
+          operator: In
+          values:
+          - us-east
+
+More flexible than nodeSelector
+
+Option 3: Taints & Tolerations
+Used when nodes are restricted
+Example:
+tolerations:
+- key: node-role.kubernetes.io/master
+  effect: NoSchedule
+
+Allows DaemonSet to run on:
+	• control-plane / master nodes
+
+Internal Logic
+DaemonSet controller internally does:
+1. Get all nodes
+2. Filter nodes (nodeSelector / affinity / tolerations)
+3. For each matching node:
+      create 1 Pod
+
+Example Scenarios
+Case 1: No nodeSelector
+Nodes: 3
+→ Pods: 3 (all nodes)
+
+Case 2: nodeSelector applied
+Nodes:
+Node1 → disktype=ssd
+Node2 → disktype=hdd
+Node3 → disktype=ssd
+
+→ Pods only on Node1 & Node3
+
+Case 3: New node added
+New Node4 → disktype=ssd
+→ Pod automatically created
+
+You don’t need to update YAML
+
+Important Point
+You NEVER define nodes like this in DaemonSet:
+# WRONG approach
+nodes:
+- node1
+- node2
+
+Kubernetes does NOT work this way
+Instead:
+	• You define rules
+	• Controller decides nodes
+
+###
+
+Kubernetes decides “which node should run this Pod?” using:
+
+nodeSelector  → simple filtering
+nodeAffinity  → advanced rules
+taints        → node repels pods
+tolerations   → pod allowed to enter tainted nodes
+
+1. nodeSelector (Simple Filtering)
+What it is
+A basic key-value match between:
+	• Pod requirement
+	• Node labels
+
+How it works
+Node labels:
+kubectl label node node1 disktype=ssd
+kubectl label node node2 disktype=hdd
+
+DaemonSet YAML:
+spec:
+  template:
+    spec:
+      nodeSelector:
+        disktype: ssd
+
+Internal Logic
+For each node:
+   if node.labels["disktype"] == "ssd"
+       → create Pod
+   else
+       → skip
+
+
+Example
+Cluster:
+Node1 → disktype=ssd
+Node2 → disktype=hdd
+Node3 → disktype=ssd
+
+Result:
+Node1 → Pod
+Node2 → No Pod
+Node3 → Pod
+
+Limitations
+	• Only exact match
+	• No conditions like:
+		○ OR
+		○ NOT
+		○ Greater than
+That’s why we need Node Affinity
+
+2. Node Affinity (Advanced Scheduling Rules)
+What it is
+A more powerful version of nodeSelector that supports:
+	• Complex logic
+	• Expressions
+	• Multiple conditions
+
+Types of Node Affinity
+1. Required (Hard Rule)
+requiredDuringSchedulingIgnoredDuringExecution
+Pod must satisfy this rule
+Otherwise → Pod NOT scheduled
+
+2. Preferred (Soft Rule)
+preferredDuringSchedulingIgnoredDuringExecution
+Kubernetes tries, but not mandatory
+
+Example
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: region
+          operator: In
+          values:
+          - us-east
+
+Internal Working
+Check node label:
+   region ∈ [us-east] ?
+YES → schedule Pod
+NO  → reject node
+
+Example
+Nodes:
+Node1 → region=us-east
+Node2 → region=us-west
+Node3 → region=us-east
+
+Result:
+Node1 → Pod
+Node2 → No Pod
+Node3 → Pod
+
+Operators
+Operator	Meaning
+In	value must match
+NotIn	must NOT match
+Exists	key exists
+DoesNotExist	key must NOT exist
+Gt	greater than
+Lt	less than
+
+Example with multiple conditions:
+matchExpressions:
+- key: region
+  operator: In
+  values: [us-east]
+- key: disktype
+  operator: In
+  values: [ssd]
+BOTH must match
+
+Key Difference vs nodeSelector
+Feature	nodeSelector	Node Affinity
+Complexity	Simple	Advanced
+Logic	AND only	AND, OR
+Operators	= only	Many
+
+3. Taints & Tolerations
+This is VERY IMPORTANT and often confusing.
+
+Core Idea
+Instead of Pod choosing node:
+Node says:
+"I don’t want Pods unless they tolerate me"
+
+Taints (Applied on Node)
+Example:
+kubectl taint nodes node1 key=value:NoSchedule
+
+Meaning:
+Node1 → Reject all Pods
+UNLESS they tolerate this taint
+
+Taint Effects
+Effect	Meaning
+NoSchedule	Pod will NOT be scheduled
+PreferNoSchedule	Avoid if possible
+NoExecute	Evict running Pods
+
+Tolerations (Applied on Pod)
+tolerations:
+- key: "key"
+  operator: "Equal"
+  value: "value"
+  effect: "NoSchedule"
+
+Internal Logic
+Node has taint → key=value:NoSchedule
+
+Pod:
+   if toleration matches
+       → allow scheduling
+   else
+       → reject
+
+Example
+Node:
+Node1 → taint: gpu=true:NoSchedule
+
+Pod WITHOUT toleration:
+→ Cannot run
+
+Pod WITH toleration:
+tolerations:
+- key: "gpu"
+  value: "true"
+  effect: "NoSchedule"
+→ Allowed
+
+Special Case: Control Plane Nodes
+By default:
+Master node has taint:
+node-role.kubernetes.io/control-plane:NoSchedule
+
+Why?
+To prevent normal workloads from running there
+
+DaemonSet Exception
+If you want DaemonSet to run on master:
+
+tolerations:
+- key: node-role.kubernetes.io/control-plane
+  effect: NoSchedule
+
+Flow inside Kubernetes:
+1. Filter nodes using:
+   - nodeSelector / affinity
+
+2. Check taints:
+   - If node has taint → check toleration
+
+3. Final decision:
+   - If passes all → Pod scheduled
+
+Combined Example
+spec:
+  template:
+    spec:
+      nodeSelector:
+        disktype: ssd
+affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: region
+                operator: In
+                values: [us-east]
+tolerations:
+      - key: gpu
+        operator: Equal
+        value: "true"
+        effect: NoSchedule
+
+Result Logic:
+Node must:
+ disktype = ssd
+ region = us-east
+ If tainted (gpu=true), must tolerate 
+
+###
+
+What are Taints and Tolerations?
+In Kubernetes:
+	• Taint (on Node) = Don’t allow Pods here”
+	• Toleration (on Pod) = “I can handle (tolerate) that restriction”
+
+What does “tolerate” actually mean?
+To tolerate = to accept or ignore a restriction
+In Kubernetes:
+If a node has a taint:
+Node says: "I have a restriction"
+A Pod with toleration says:
+"I understand your restriction, and I’m allowed to run here"
+
+Real-Life Analogy
+Imagine:
+A room has a sign:
+"No Entry Without Helmet"
+	• Person without helmet → Not allowed
+	• Person with helmet → Allowed
+Here:
+	• Rule (No helmet → no entry) = Taint
+	• Helmet = Toleration
+“Tolerate” means:
+	“I meet the condition required to enter.”
+
+Core Concept
+Taint (Applied on Node)
+Example:
+kubectl taint nodes node1 gpu=true:NoSchedule
+
+Meaning:
+Node1 says:
+"I will NOT accept any Pods
+unless they tolerate gpu=true"
+
+Toleration (Applied on Pod)
+tolerations:
+- key: "gpu"
+  operator: "Equal"
+  value: "true"
+  effect: "NoSchedule"
+
+Meaning:
+Pod says:
+"I can run on nodes that have gpu=true taint"
+
+How Kubernetes Decides (Internal Logic)
+When scheduling a Pod:
+1. Check node
+2. Does node have taint?
+   YES →
+       Does Pod tolerate it?
+           YES → allow
+           NO  → reject
+   NO →
+       allow
+
+Example
+Node:
+Node1 → gpu=true:NoSchedule
+Node2 → no taint
+
+Pod WITHOUT toleration:
+Node1 → Not allowed
+Node2 → Allowed
+
+Pod WITH toleration:
+Node1 → Allowed
+Node2 → Allowed
+
+Types of Taint Effects
+1. NoSchedule
+Rule:
+Do NOT schedule Pod here unless tolerated
+
+2. PreferNoSchedule
+Rule:
+Try to avoid scheduling, but not strict
+
+3. NoExecute
+Rule:
+- Don’t schedule new Pods
+- Remove existing Pods
+Example:
+	• Node becomes unhealthy → Pods evicted
+
+Important Insight
+Toleration does NOT force scheduling
+It only says:
+"I am allowed"
+NOT:
+"I must run here"
+
+Concept	Meaning
+Taint	Node restriction
+Toleration	Pod permission
+Tolerate	Accept node restriction
+
+Real-World Use Cases
+1. GPU Nodes
+Only GPU workloads should run
+
+2. Master/Control-plane Nodes
+Prevent normal apps from running
+Default taint:
+node-role.kubernetes.io/control-plane:NoSchedule
+
+3. Dedicated Nodes
+Only specific apps allowed

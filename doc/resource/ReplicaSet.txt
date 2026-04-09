@@ -1,0 +1,149 @@
+What is a ReplicaSet?
+In Kubernetes:
+ReplicaSet ensures that a specified number of identical Pods are always running
+
+ReplicaSet = “Keep N Pods running at all times”
+Example
+You define:
+replicas: 3
+
+ReplicaSet ensures:
+Always 3 Pods running
+
+Scenario
+Initial → Pod1, Pod2, Pod3
+
+If one Pod crashes:
+Pod2 deleted
+
+ReplicaSet creates new:
+Pod4 created
+
+Final:
+Pod1, Pod3, Pod4 (still 3 Pods)
+
+Architecture
+
++--------------------------+
+|   ReplicaSet Object      |
++----------+---------------+
+           |
+           v
++----------------------------+
+| ReplicaSet Controller      |
++----------+-----------------+
+           |
+           v
++----------------------+
+|     API Server       |
++----------+-----------+
+           |
+           v
++----------------------+
+|        etcd          |
++----------+-----------+
+           |
+           v
++----------------------+
+|        Pods          |
++----------------------+
+
+Key Parts of ReplicaSet
+1. ReplicaSet Object (YAML)
+Defines:
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: my-app
+  template:
+    spec:
+      containers:
+      - name: app
+        image: nginx
+
+2. Selector
+This decides:
+Which Pods belong to this ReplicaSet
+
+3. Pod Template
+Blueprint for creating Pods
+
+How ReplicaSet Works Internally
+Core Logic (Reconciliation Loop)
+ReplicaSet controller continuously does:
+1. Check desired replicas
+2. Check current Pods
+3. Compare both
+4. Take action
+
+Internal Flow
+Step 1: User creates ReplicaSet
+kubectl apply -f rs.yaml
+API Server stores it in etcd
+
+Step 2: ReplicaSet controller watches
+Watches ReplicaSet + Pods via API Server
+
+Step 3: Compare desired vs actual
+Desired = 3
+Current = 0
+
+Step 4: Create Pods
+Controller calls API Server:
+Create 3 Pods
+
+Step 5: Pods start running
+Now:
+Pod1, Pod2, Pod3
+
+Continuous Monitoring
+Case 1: Pod deleted
+Pod2 deleted
+
+Controller detects:
+Desired = 3
+Current = 2
+
+Action:
+Create 1 new Pod
+
+Case 2: Too many Pods
+Manual Pod created with same label
+
+Now:
+Current = 4
+Desired = 3
+
+Action:
+Delete 1 Pod
+
+Internal Architecture Flow
+1. ReplicaSet created
+        ↓
+2. Stored in etcd via API Server
+        ↓
+3. ReplicaSet Controller watches
+        ↓
+4. Lists Pods matching selector
+        ↓
+5. Compares desired vs actual
+        ↓
+6. Calls API Server:
+   - Create Pods OR
+   - Delete Pods
+        ↓
+7. Loop continues forever
+
+Relationship with Deployment
+Important:
+You usually DO NOT create ReplicaSet directly
+Instead:
+Deployment → creates & manages ReplicaSets
+
+Flow
+Deployment
+    ↓
+ReplicaSet
+    ↓
+Pods

@@ -1,0 +1,522 @@
+Autoscaling is how Kubernetes automatically adjusts resources based on load so your app stays fast without wasting resources.
+
+What is Autoscaling?
+In Kubernetes:
+Autoscaling = automatically adjusting resources based on usage
+
+Two Types
+Type	What changes
+HPA	Number of Pods
+VPA	CPU/Memory of Pods
+
+Horizontal Pod Autoscaler (HPA)
+In Kubernetes:
+Container → cgroups → cAdvisor (inside Kubelet) → Kubelet → Metrics Server → HPA
+
+Everything starts from Linux kernel (cgroups)
+
+Step 1: What is cgroup?
+cgroup (Control Group) is a Linux kernel feature that:
+Tracks and limits CPU, memory, and other resources for processes
+
+Why Kubernetes uses cgroups?
+Every container:
+Runs as a Linux process
+To control and measure resources:
+Kubernetes → uses cgroups
+
+Example
+You define:
+resources:
+  requests:
+    cpu: 500m
+
+Kubernetes creates a cgroup like:
+/sys/fs/cgroup/cpu/kubepods/pod123/container456/
+
+Inside that cgroup
+Linux tracks:
+cpu.usage
+cpu.cfs_quota_us
+memory.usage_in_bytes
+
+Example
+cpu.usage = 2,000,000,000 nanoseconds
+Means:
+Container used CPU time = 2 seconds
+
+Key Idea
+CPU usage is NOT a percentage in Linux
+It is:
+Time spent using CPU
+
+Step 2: What is cAdvisor?
+cAdvisor (Container Advisor) is a tool embedded inside Kubelet that:
+Reads cgroup data and converts it into usable container metrics
+
+Role of cAdvisor
+Reads raw kernel data → converts → CPU %, memory usage
+
+Internal Architecture of cAdvisor
++----------------------+
+|      cAdvisor        |
++----------+-----------+
+           |
+           v
++-------------------------+
+| cgroup filesystem       |
+| (/sys/fs/cgroup)        |
++----------+--------------+
+           |
+           v
++------------------------+
+|     Linux Kernel       |
++------------------------+
+
+How cAdvisor Works Internally
+Step 2.1: Scan cgroups
+cAdvisor scans:
+/sys/fs/cgroup/
+
+Step 2.2: Read CPU usage
+Example:
+cpuacct.usage = 3,000,000,000 ns
+
+Step 2.3: Calculate CPU %
+Formula:
+CPU % = CPU time used / elapsed time
+
+Example
+CPU time used = 1 second
+Elapsed time  = 2 seconds
+CPU usage = 50%
+
+Step 2.4: Map to container
+cAdvisor maps:
+cgroup → container → Pod
+
+Step 3: How Kubelet Uses cAdvisor
+Kubelet role
+Kubelet:
+Uses cAdvisor internally
+Exposes metrics via API
+
+Kubelet Architecture
++----------------------+
+|      Kubelet         |
+|  (Node Agent)        |
++----------+-----------+
+           |
+           v
++----------------------+
+|      cAdvisor        |
++----------+-----------+
+           |
+           v
++----------------------+
+|     cgroups          |
++----------------------+
+
+What Kubelet exposes
+API endpoint:
+/metrics/resource
+
+Example Output
+pod: my-app
+cpu: 200m
+memory: 300Mi
+
+Step 4: Metrics Server
+What it does
+Metrics Server:
+Pulls metrics from all Kubelets
+Aggregates them
+
+Flow
+Node1 Kubelet → metrics
+Node2 Kubelet → metrics
+        ↓
+Metrics Server
+        ↓
+metrics.k8s.io API
+
+Step 5: HPA Controller Calculation
+
+Pod CPU
+Pod1 → 80%
+Pod2 → 60%
+Pod3 → 40%
+
+Metrics Server
+Average = (80 + 60 + 40) / 3 = 60%
+
+HPA
+Target = 50%
+
+Formula
+Desired Replicas = Current × (Current / Target)
+
+Result
+3 × (60 / 50) = 3.6 ≈ 4 Pods
+
+Continuous Loop
+Every ~15 seconds:
+   Kubelet updates metrics
+   Metrics Server refreshes
+   HPA recalculates
+
+HPA controller calls API server and updates Deployment CR:
+spec.replicas = 4
+
+Deployment controller triggered and creates new Pod with new specification
+
+NOTE: controllers always interact with the API server (not etcd directly), and admission controllers intercept requests inside the API server before the object is persisted
+
+Vertical Pod Autoscaler (VPA)
+In Kubernetes:
+VPA automatically adjusts CPU and memory requests/limits of a Pod based on actual usage
+
+HPA → adds more Pods
+VPA → makes each Pod stronger/weaker
+
+Why VPA is needed (Problem it solves)
+Without VPA
+You manually set:
+resources:
+  requests:
+    cpu: 500m
+    memory: 512Mi
+
+But actual usage:
+CPU = 900m  (under-provisioned → slow app)
+OR
+CPU = 100m  (over-provisioned → waste)
+
+With VPA
+VPA observes usage → recommends → adjusts automatically
+
+VPA Architecture
+
++--------------------------------+
+|   VPA Recommender              |
++--------------------------------+
+|   VPA Updater                  |
++--------------------------------+
+            |
+            v
++----------------------------+
+|     Kubernetes API         |
++----------------------------+
+            |
+            v
++-------------------------------+
+|   VPA Admission Ctrl          |
++-----------+-------------------+
+            |
+            v
++----------------------------+
+|         Pods               |
++----------------------------+
+
+1. VPA Recommender
+Continuously analyzes historical resource usage
+
+Internal Working
+Metrics Server → provides CPU/memory
+        ↓
+Recommender stores history
+        ↓
+Applies statistical model
+        ↓
+Produces recommendation
+
+Important: Not simple average
+It uses:
+• Percentiles (like 90th percentile)
+• Peak detection
+• Safety buffer
+
+Example
+Usage samples:
+400m, 600m, 800m
+Instead of average (600m), it may choose:
+~700m (safe + stable)
+
+Where stored?
+Inside VPA object:
+status:
+  recommendation:
+    containerRecommendations:
+    - target:
+        cpu: 700m
+
+2. VPA Updater
+Decides:
+Should this Pod be replaced?
+
+Internal Logic
+Current request vs Recommended
+        ↓
+Check difference threshold
+        ↓
+Check disruption rules (don’t break app)
+        ↓
+Evict Pod if needed
+
+Example
+Current = 300m
+Recommended = 700m
+Difference is large → update needed
+
+Important
+Updater does NOT directly delete Pod blindly
+It uses:
+Eviction API (safe deletion)
+
+3. Deployment Controller
+After the Pod deletion is processed by the API server, the Deployment controller (watching via the API server) detects that the actual state differs from the desired state and sends a request to the API server to create a new Pod.
+
+Pod deletion request → API Server processes → etcd updated
+        ↓
+API Server notifies watchers (controllers)
+        ↓
+Deployment controller detects Pod missing
+        ↓
+Deployment controller sends request to API Server
+        ↓
+New Pod is created
+
+4. VPA Admission Controller
+Intercepts Pod creation request and modifies it
+
+Internal Working
+User/Deployment Controller → sends Pod create request
+        ↓
+API Server receives request
+        ↓
+Admission Controller intercepts
+        ↓
+VPA injects new CPU/memory
+        ↓
+Pod stored in etcd
+
+Example
+Original:
+cpu: 200m
+
+Modified:
+cpu: 700m ---> injected by VPA
+
+Internal Flow
+Step 1: Metrics Collection
+Container → cgroups → cAdvisor → Kubelet → Metrics Server
+Same as HPA
+
+Step 2: Recommender Analysis
+Builds history:
+400m, 600m, 800m
+Produces:
+Recommendation = ~700m
+
+Step 3: Store Recommendation
+Stored in:
+VPA CR (Custom Resource)
+
+Step 4: Updater Decision
+Compares:
+Current (300m) vs Recommended (700m)
+Decides:
+Update required
+
+Step 5: Pod Update
+Does VPA create new Pod?
+NO
+Instead:
+1. VPA calls Kubernetes API (Eviction)
+2. Pod is deleted
+3. Deployment notices missing Pod
+4. Deployment creates new Pod
+
+Flow
+VPA Updater
+   ↓
+Calls API Server (Eviction API)
+   ↓
+Pod deleted
+   ↓
+Deployment Controller reacts
+   ↓
+Creates new Pod
+
+Step 6: Admission Controller
+When new Pod is created:
+API Server → Admission Controller → modifies resources
+
+Flow
+1. Container runs
+        ↓
+2. cgroups track usage
+        ↓
+3. cAdvisor reads metrics
+        ↓
+4. Metrics Server aggregates
+        ↓
+5. VPA Recommender calculates
+        ↓
+6. Stores recommendation
+        ↓
+7. VPA Updater calls API Server (Eviction)
+        ↓
+8. Pod deleted
+        ↓
+9. Deployment creates new Pod
+        ↓
+10. Admission Controller modifies resources
+        ↓
+11. New Pod runs with updated CPU/memory
+
+Node Autoscaler
+Node Autoscaler automatically adds or removes worker nodes based on cluster demand
+
+Node Autoscaler = “Add/remove machines (nodes) when Pods need space”
+
+Purpose 
+Problem without Node Autoscaler
+HPA creates more Pods
+→ Nodes are full
+→ Pods stay Pending
+
+With Node Autoscaler
+New nodes are added automatically
+→ Pods get scheduled
+
+Component
+Cluster Autoscaler (CA)
+	• It runs as a Pod inside the cluster
+
+Architecture
+
++-----------------------------+
+|   Cluster Autoscaler        |
++-----------+-----------------+
+            |
+            v
++--------------------------+
+|      API Server          |
++-----------+--------------+
+            |
+            v
++--------------------------+
+|     Scheduler            |
++-----------+--------------+
+            |
+            v
++--------------------------+
+|        Nodes             |
++-----------+--------------+
+            |
+            v
++-------------------------------------+
+| Cloud Provider (AWS/GCP)            |
++-------------------------------------+
+
+What CA Watches
+Cluster Autoscaler continuously watches:
+- Pending Pods
+- Node utilization
+- Node groups
+
+How Node Autoscaler Works Internally
+Core Loop
+Observe → Analyze → Decide → Scale → Repeat
+
+SCALE UP FLOW (Add Nodes)
+Step 1: Pods become Pending
+Scheduler cannot place Pods
+→ status = Pending
+
+Step 2: CA detects unschedulable Pods
+It watches via API Server:
+Pods with "Unschedulable" condition
+
+Step 3: Simulation
+CA simulates:
+“If I add a node, can this Pod fit?”
+
+Example
+Pod needs:
+CPU = 2 cores
+Memory = 4GB
+
+CA checks:
+Node type has:
+CPU = 4 cores
+Memory = 8GB
+→ YES, it fits
+
+Step 4: Call Cloud Provider
+CA calls:
+Cloud API → create new node (VM)
+
+Step 5: Node joins cluster
+New node registers with API Server
+
+Step 6: Scheduler assigns Pods
+Pending Pods → Running
+
+SCALE DOWN FLOW (Remove Nodes)
+Step 1: Detect underutilized node
+Node CPU low
+Few Pods running
+
+Step 2: Check if removable
+CA verifies:
+Can Pods move to other nodes?
+
+Step 3: Drain node
+Evict Pods safely
+
+Step 4: Delete node
+Cloud API → remove VM
+
+Internal Components of Cluster Autoscaler
+1. Watcher
+Observes Pods & Nodes via API Server
+
+2. Scheduler Simulator
+Simulates Pod placement on new nodes
+
+3. Decision Engine
+Decides scale up or down
+
+4. Cloud Provider Interface
+Calls AWS/GCP APIs to create/delete nodes
+
+Important Concepts
+Node Groups
+Group of identical nodes
+Autoscaler scales node groups, not individual nodes randomly
+
+Unschedulable Pods Trigger Scaling
+Pending Pods = trigger signal
+
+Works with Scheduler
+Autoscaler adds nodes
+Scheduler places Pods
+
+Internal Flow
+1. HPA creates more Pods
+        ↓
+2. Some Pods Pending
+        ↓
+3. Cluster Autoscaler detects
+        ↓
+4. Simulates new node
+        ↓
+5. Calls cloud API
+        ↓
+6. Node created
+        ↓
+7. Node joins cluster
+        ↓
+8. Scheduler assigns Pods

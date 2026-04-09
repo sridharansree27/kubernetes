@@ -1,0 +1,363 @@
+What is Kustomize?
+Kustomize is a configuration management tool built into Kubernetes that lets you:
+	• Customize Kubernetes YAML without modifying the original files
+	• Kustomize = Base YAML + Overlays (changes) → Final YAML
+
+Purpose of Kustomize
+Problem (without Kustomize)
+You maintain separate YAML files:
+deployment-dev.yaml
+deployment-prod.yaml
+deployment-test.yaml
+Problems:
+	• Duplication
+	• Hard to update
+	• Error-prone
+
+Solution (Kustomize)
+base/          → common configuration
+overlays/    → environment-specific changes
+
+Reuse + clean separation + maintainability
+
+Architecture
+Kustomize is a client-side build engine (runs before applying to cluster).
+
+   kubectl apply -k overlays/dev
+            │
+            ▼
+      Kustomize Engine
+            │
+   ┌────────┴────────┐
+   ▼                 ▼
+Base Resources    Overlay Config
+(YAML files)     (patches, changes)
+   │                 │
+   └────────┬────────┘
+            ▼
+   Resource Accumulator
+            ▼
+   Transformer Pipeline
+            ▼
+   Final YAML Output
+            ▼
+   Kubernetes API Server
+
+Components
+1. Base
+	• Original YAML (Deployment, Service, etc.)
+	• No environment-specific data
+
+2. Overlay
+	• Custom changes (dev, prod, etc.)
+
+3. kustomization.yaml
+Defines:
+resources:
+- ../../base
+patches:
+- patch.yaml
+namePrefix: dev-
+
+4. Kustomize Engine Internals
+	• Resource Loader
+	• Resource Accumulator
+	• Transformer Pipeline
+
+Internal Working
+Command:
+kubectl apply -k overlays/dev
+
+Step 1: Read kustomization.yaml
+	• Identify:
+		○ resources
+		○ patches
+		○ transformations
+
+Step 2: Load Base YAML
+Example:
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-app
+spec:
+  replicas: 2
+
+Step 3: Resource Accumulation
+
+What is “Resource Accumulation” in Kustomize?
+Resource Accumulation = collecting all Kubernetes YAML resources and organizing them into an internal map (called a Resource Map)
+
+Before Kustomize can modify anything, it must first:
+Load → Identify → Store → Track
+
+all resources in a structured way.
+
+Why this step is needed
+Kustomize needs to answer:
+	• Which resources exist?
+	• Which one should a patch apply to?
+	• What is the unique identity of each object?
+That’s why it builds an internal map
+
+How Resource Accumulation Works
+Step 3.1: Read kustomization.yaml
+Example:
+resources:
+- deployment.yaml
+- service.yaml
+
+Step 3.2: Load YAML files
+deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-app
+
+service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: my-app-service
+
+Step 3.3: Convert into internal objects
+Kustomize parses YAML into structured objects like:
+Object 1:
+  kind: Deployment
+  name: my-app
+Object 2:
+  kind: Service
+  name: my-app-service
+
+Step 3.4: Build Resource Map
+Kustomize creates an internal map like:
+
+Key                                                            Value
+-----------------------------------------------------------------------
+apps/v1|Deployment|my-app                                    → Object 1
+v1|Service|my-app-service                                    → Object 2
+
+Why this map is CRITICAL
+Because all later steps depend on it.
+
+1. Patch Matching
+When you apply a patch:
+kind: Deployment
+metadata:
+  name: my-app
+spec:
+  replicas: 1
+
+Kustomize finds:
+(Deployment, my-app)
+from the resource map and updates it.
+
+2. Transformers
+Example:
+namePrefix: dev-
+
+Kustomize loops through the map:
+Deployment → my-app → dev-my-app
+Service → my-app-service → dev-my-app-service
+
+3. Conflict Detection
+If two resources have same identity:
+apps/v1|Deployment|my-app
+apps/v1|Deployment|my-app
+
+Kustomize throws error:
+Duplicate resource
+
+Accumulation Across Base + Overlay
+Kustomize does NOT treat base and overlay separately at runtime
+Instead:
+	• It loads everything and merges into ONE unified Resource Map
+
+Structure
+base/
+  deployment.yaml
+overlays/dev/
+  kustomization.yaml
+
+Flow:
+1. Load base resources
+2. Load overlay resources
+3. Merge into ONE resource map
+
+Base + Overlay → ONE combined internal map
+
+Step 3.1: Load Base Resources
+base/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-app
+spec:
+  replicas: 2
+
+After loading base
+Resource Map:
+apps/v1|Deployment|my-app → Deployment (replicas=2)
+
+Step 3.2: Load Overlay (dev)
+overlays/dev/kustomization.yaml
+resources:
+- ../../base
+patches:
+- patch.yaml
+namePrefix: dev-
+
+overlays/dev/patch.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-app
+spec:
+  replicas: 1
+
+	• Overlay usually does NOT create a second object for the same resource
+	• Overlay provides instructions (patches/transformations) to MODIFY the existing base object
+	• Overlay creates a new resource only if there is no existing resource in the accumulated resource map with the same identity (apiVersion, kind, name, namespace)
+
+Internal Resource Map becomes:
+apps/v1|Deployment|my-app → Deployment (replicas=2)
+Only one Deployment object exists (not two!)
+
+Step 3.3: Apply Patch (using same map)
+Patch says:
+Target:
+Deployment + my-app
+
+Before patch:
+replicas = 2
+After patch:
+replicas = 1
+
+Updated Resource Map:
+apps/v1|Deployment|my-app → Deployment (replicas=1)
+
+Step 3.4: Apply Transformer (namePrefix)
+namePrefix: dev-
+
+Final Resource Map:
+apps/v1|Deployment|dev-my-app → Deployment (replicas=1)
+
+Final Output
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dev-my-app
+spec:
+  replicas: 1
+
+Flow
+1. Load base YAML
+        ↓
+2. Load overlay (patches, config)
+        ↓
+3. Build ONE resource map
+        ↓
+4. Apply patches (modify existing resources)
+        ↓
+5. Apply transformers (prefix, labels, etc.)
+        ↓
+6. Generate final YAML
+
+
+Internal Concept
+Each resource is identified using:
+Group + Version + Kind + Name + Namespace
+
+Example key:
+apps/v1|Deployment|my-app|default
+
+Internal Flow
+Read kustomization.yaml
+        ↓
+Load YAML files
+        ↓
+Parse into objects
+        ↓
+Assign unique identity
+        ↓
+Store in Resource Map
+
+Step 4: Transformer Pipeline
+All changes are applied via Transformers
+
+What are Transformers?
+Transformers = functions that modify Kubernetes resources
+They:
+	• Take input YAML
+	• Modify specific fields
+	• Output updated YAML
+
+Input YAML → Transformer → Modified YAML
+
+Types of Transformers
+1. Name Transformer
+namePrefix: dev-
+Result:
+my-app → dev-my-app
+
+2. Namespace Transformer
+namespace: dev
+
+3. Label Transformer
+commonLabels:
+  env: dev
+
+4. Annotation Transformer
+commonAnnotations:
+  team: backend
+
+5. Image Transformer
+images:
+- name: my-app
+  newTag: v2
+
+6. Patch Transformer
+Example:
+spec:
+  replicas: 1
+
+Internal Patch Logic
+Kustomize matches resource using:
+apiVersion + kind + metadata.name
+Then merges patch.
+
+Types of Patches
+1. Strategic Merge Patch (Default)
+Example:
+spec:
+  replicas: 3
+	• Smart merging
+	• Uses Kubernetes schema
+
+2. JSON Patch (RFC 6902)
+Example:
+- op: replace
+  path: /spec/replicas
+  value: 5
+	• Precise operations
+	• Works like instructions
+
+Internal Workflow
+Read kustomization.yaml
+        ↓
+Load base + overlay
+        ↓
+Build resource map
+        ↓
+Apply transformers:
+   - name
+   - namespace
+   - labels
+   - patches
+   - images
+        ↓
+Merge all changes
+        ↓
+Generate final YAML
+        ↓
+Send to Kubernetes API server

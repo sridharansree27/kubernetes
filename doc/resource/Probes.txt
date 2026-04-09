@@ -1,0 +1,249 @@
+These probes are how Kubernetes checks if your container is healthy and ready to serve traffic.
+ 
+What are Probes in Kubernetes?
+In Kubernetes:
+Probes = health checks for containers
+
+They answer questions like:
+Is the app running correctly?
+Is it ready to receive traffic?
+Is it stuck and needs restart?
+
+Types of Probes
+Probe	Purpose
+Liveness	Is the app alive?
+Readiness	Is the app ready to serve traffic?
+Startup	Has the app finished starting?
+
+1. Liveness Probe (Restart Logic)
+Purpose
+Checks:
+"Is the application still running properly?"
+
+If it fails:
+Kubernetes → RESTARTS the container
+
+Example
+Your app:
+	• Starts fine
+	• After some time → gets stuck (deadlock)
+Liveness probe detects:
+App is not responding → restart it
+
+Example YAML
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 8080
+  initialDelaySeconds: 10
+  periodSeconds: 5
+
+How it works
+Every 5 seconds:
+   call /health endpoint
+   if fails repeatedly → restart container
+
+Real Example
+App stuck → not responding
+→ Liveness fails
+→ Pod restarted automatically
+
+2. Readiness Probe (Traffic Control)
+Purpose
+Checks:
+"Is the app ready to handle requests?"
+
+If it fails:
+Pod is NOT restarted
+BUT removed from Service load balancing
+
+Example Scenario
+Your app:
+	• Starts
+	• Needs DB connection
+Until DB is ready:
+App is NOT ready
+
+Example YAML
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: 8080
+  initialDelaySeconds: 5
+  periodSeconds: 5
+
+How it works
+If readiness fails:
+   Pod stays running
+   BUT no traffic is sent to it
+
+Real Example
+App starting → DB not connected
+→ readiness = FAIL
+→ no traffic
+
+DB connected
+→ readiness = PASS
+→ traffic starts
+
+3. Startup Probe (Slow App Protection)
+Purpose
+Checks:
+"Has the application finished starting?"
+
+Why needed?
+Some apps:
+	• Take long time to start (Java, ML apps)
+Without startup probe:
+Liveness probe may kill app too early
+
+Example YAML
+startupProbe:
+  httpGet:
+    path: /startup
+    port: 8080
+  failureThreshold: 30
+  periodSeconds: 10
+
+How it works
+Until startup probe succeeds:
+   Liveness & Readiness are DISABLED
+
+Real Example
+App takes 3 minutes to start
+Without startup probe:
+   liveness fails → restart loop
+With startup probe:
+   wait until app starts
+
+Combined Behavior
+Startup Probe → runs first
+        ↓
+Once success:
+   Readiness + Liveness start
+
+Comparison Table
+Feature	Liveness	Readiness	Startup
+Purpose	Detect crash	Control traffic	Handle slow start
+Failure action	Restart container	Stop traffic	Delay other probes
+Runs when	Always	Always	Only at startup
+
+Probe Types (How checks are done)
+All probes support:
+1. HTTP Check
+httpGet:
+  path: /health
+  port: 8080
+
+2. TCP Check
+tcpSocket:
+  port: 3306
+
+3. Command Check
+exec:
+  command:
+  - cat
+  - /tmp/healthy
+
+Probes Configuration:
+• Probes are configured in Pod (container spec)
+• They call an endpoint exposed by your application inside the container
+• The port is the container’s port, not Service port
+
+Who executes the probe?
+Kubelet (running on the node)
+
+Flow:
+Kubelet
+   ↓
+Sends HTTP/TCP/exec request
+   ↓
+Pod (container)
+   ↓
+Application responds
+
+Kubelet does NOT call probes continuously all the time.
+It calls them based on timing configuration and lifecycle stage of the container.
+In Kubernetes:
+• Kubelet runs probes periodically (based on periodSeconds) and conditionally (based on container state).
+
+When exactly does Kubelet call probes?
+Let’s break it per probe type.
+
+1. Startup Probe (runs first)
+When?
+Immediately after container starts
+
+How often?
+Controlled by:
+periodSeconds
+failureThreshold
+
+Behavior
+Until startup probe succeeds:
+   ONLY startup probe runs
+   Liveness & Readiness are paused
+
+Example
+startupProbe:
+  httpGet:
+    path: /startup
+    port: 8080
+  periodSeconds: 10
+  failureThreshold: 30
+
+Means:
+Every 10 seconds → check
+Max attempts = 30 (≈ 5 minutes)
+
+2. Readiness Probe (traffic control)
+When?
+Starts after container starts
+OR after startup probe succeeds
+
+How often?
+periodSeconds: 5
+Means:
+Every 5 seconds → check readiness
+
+Behavior:
+If success → Pod gets traffic
+If fail → Pod removed from Service
+
+Keeps running continuously
+
+3. Liveness Probe (restart logic)
+When?
+Starts after container starts
+OR after startup probe succeeds
+
+How often?
+periodSeconds: 10
+Means:
+Every 10 seconds → check health
+
+Behavior:
+If fails repeatedly → container restarted
+
+Timing Parameters:
+1. initialDelaySeconds
+initialDelaySeconds: 10
+Wait before first probe
+
+2. periodSeconds
+periodSeconds: 5
+How often probe runs
+
+3. failureThreshold
+failureThreshold: 3
+Fail count before action
+
+4. successThreshold (mainly readiness)
+How many successes needed
+
+When probes STOP
+If container crashes:
+Container restarts → probes restart
+
+If pod is terminated:
+All probes stop
